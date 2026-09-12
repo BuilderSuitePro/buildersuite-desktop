@@ -34,6 +34,15 @@ jobs:
 
       - run: npm ci
 
+      # electron-builder only packages out/, it never produces it, so the bundle
+      # has to be built first. This does not use npm run build:${{ matrix.target }}
+      # because that also runs npm run assets, which shells out to sips and so
+      # only works on macOS; the assets it generates are committed already.
+      - name: Bundle ${{ matrix.target }}
+        run: npx electron-vite build
+        env:
+          BSP_TARGET: ${{ matrix.target }}
+
       # The macOS DMG step intermittently fails inside dmgbuild with a plistlib
       # error from hdiutil. It succeeds on a retry.
       - name: Build and publish ${{ matrix.target }}
