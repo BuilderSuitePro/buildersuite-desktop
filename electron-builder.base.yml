@@ -1,0 +1,80 @@
+# Shared packaging config. Everything that differs between the two apps lives in
+# electron-builder.suite.yml and electron-builder.teams.yml, which extend this.
+
+copyright: Copyright © Kingdom Construction Texas LLC
+
+asar: true
+
+files:
+  - out/**
+  - package.json
+
+# Shared runtime resources. Each target config adds its own tray icons on top.
+extraResources:
+  - from: build/overlays
+    to: overlays
+
+mac:
+  category: public.app-category.business
+  # Mandatory for notarization.
+  hardenedRuntime: true
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  gatekeeperAssess: false
+  # Built-in notarization. Do NOT also add an afterSign notarize script, or the
+  # app is notarized twice. Credentials come from APPLE_ID,
+  # APPLE_APP_SPECIFIC_PASSWORD and APPLE_TEAM_ID in the environment.
+  notarize: true
+  target:
+    # One universal binary covering Apple Silicon and Intel. This keeps a single
+    # stable DMG filename, which is what makes the download links permanent.
+    - target: dmg
+      arch: universal
+    # zip is REQUIRED for auto-update. electron-updater cannot apply an update
+    # from a DMG, so shipping dmg alone means Mac silently never updates.
+    - target: zip
+      arch: universal
+
+dmg:
+  background: build/dmg-background.png
+  window:
+    width: 540
+    height: 380
+  # Positioned over the supplied artwork, which already draws the arrow between
+  # them. If the background is ever resized these must move with it.
+  contents:
+    - x: 140
+      y: 210
+      type: file
+    - x: 400
+      y: 210
+      type: link
+      path: /Applications
+
+win:
+  target:
+    - target: nsis
+      arch: x64
+  # Signing is added once Azure Trusted Signing exists. Until then builds are
+  # unsigned on purpose and will show a SmartScreen warning.
+  #
+  # azureSignOptions:
+  #   publisherName: Kingdom Construction Texas LLC
+  #   endpoint: https://eus.codesigning.azure.net
+  #   codeSigningAccountName: YOUR_ACCOUNT
+  #   certificateProfileName: YOUR_PROFILE
+  #
+  # Authenticated by AZURE_TENANT_ID / AZURE_CLIENT_ID / AZURE_CLIENT_SECRET.
+  # NOTE: electron-builder v27 replaces azureSignOptions with a unified
+  # win.sign key (type: azure). This block needs migrating on that upgrade.
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  perMachine: false
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  installerSidebar: build/installerSidebar.bmp
+  uninstallerSidebar: build/installerSidebar.bmp
+  # installerIcon/uninstallerIcon are intentionally unset: electron-builder falls
+  # back to the generated application icon, and these keys require a real .ico.

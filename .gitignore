@@ -1,0 +1,17 @@
+node_modules/
+dist/
+out/
+release/
+*.log
+.DS_Store
+
+# Never commit signing material. On a public repo this would leak
+# Kingdom Construction Texas's signing identity.
+*.p12
+*.pfx
+*.cer
+*.certSigningRequest
+*.mobileprovision
+*.provisionprofile
+.env
+.env.*

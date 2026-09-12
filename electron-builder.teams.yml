@@ -1,0 +1,37 @@
+extends: electron-builder.base.yml
+
+productName: BuilderTeams
+appId: com.kingdomtexas.builderteams
+
+directories:
+  output: dist/teams
+  # icon.png here is converted to .ico and .icns automatically.
+  buildResources: build/teams
+
+extraResources:
+  - from: build/teams/tray
+    to: tray
+  - from: build/overlays
+    to: overlays
+
+publish:
+  - provider: github
+    owner: buildersuitepro
+    repo: buildersuite-desktop
+    # Distinct channel so this app can never install BuilderSuite Pro's build.
+    # Both apps publish into one repo; without this they would both write
+    # latest.yml and overwrite each other.
+    channel: teams
+    updaterCacheDirName: builderteams-updater
+
+mac:
+  icon: build/teams/icon.png
+  # No version number: the download link must stay valid across releases.
+  artifactName: BuilderTeams.${ext}
+
+win:
+  icon: build/teams/icon.png
+  artifactName: BuilderTeams-Setup.${ext}
+
+nsis:
+  shortcutName: BuilderTeams

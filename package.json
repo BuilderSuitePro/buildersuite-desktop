@@ -1,0 +1,42 @@
+{
+  "name": "buildersuite-desktop",
+  "version": "1.0.0",
+  "description": "Desktop shells for BuilderSuite Pro and BuilderTeams",
+  "author": "Kingdom Construction Texas LLC",
+  "homepage": "https://buildersuitepro.com",
+  "license": "UNLICENSED",
+  "private": true,
+  "main": "out/main/index.js",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "dev:suite": "cross-env BSP_TARGET=suite electron-vite dev",
+    "dev:teams": "cross-env BSP_TARGET=teams electron-vite dev",
+    "build:suite": "npm run assets && cross-env BSP_TARGET=suite electron-vite build",
+    "build:teams": "npm run assets && cross-env BSP_TARGET=teams electron-vite build",
+    "assets": "node scripts/prepare-assets.mjs && node scripts/generate-overlay-icons.mjs",
+    "gen:overlays": "node scripts/generate-overlay-icons.mjs",
+    "pack:suite": "npm run build:suite && electron-builder -c electron-builder.suite.yml --dir",
+    "pack:teams": "npm run build:teams && electron-builder -c electron-builder.teams.yml --dir",
+    "dist:suite": "npm run build:suite && electron-builder -c electron-builder.suite.yml",
+    "dist:teams": "npm run build:teams && electron-builder -c electron-builder.teams.yml",
+    "dist:all": "npm run dist:suite && npm run dist:teams"
+  },
+  "dependencies": {
+    "electron-store": "^8.2.0",
+    "electron-updater": "^6.8.9"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.2",
+    "@types/react-dom": "^19.2.2",
+    "@vitejs/plugin-react": "^5.1.0",
+    "cross-env": "^10.1.0",
+    "electron": "^44.3.0",
+    "electron-builder": "^26.15.3",
+    "electron-vite": "^4.0.1",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "sharp": "^0.34.4",
+    "typescript": "^5.9.3",
+    "vite": "^7.1.9"
+  }
+}

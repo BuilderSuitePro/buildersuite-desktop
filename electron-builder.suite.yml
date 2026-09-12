@@ -1,0 +1,37 @@
+extends: electron-builder.base.yml
+
+productName: BuilderSuite Pro
+appId: com.kingdomtexas.buildersuitepro
+
+directories:
+  output: dist/suite
+  # icon.png here is converted to .ico and .icns automatically.
+  buildResources: build/suite
+
+extraResources:
+  - from: build/suite/tray
+    to: tray
+  - from: build/overlays
+    to: overlays
+
+publish:
+  - provider: github
+    owner: buildersuitepro
+    repo: buildersuite-desktop
+    # Distinct channel so this app can never install BuilderTeams' build.
+    # Both apps publish into one repo; without this they would both write
+    # latest.yml and overwrite each other.
+    channel: suite
+    updaterCacheDirName: buildersuite-pro-updater
+
+mac:
+  icon: build/suite/icon.png
+  # No version number: the download link must stay valid across releases.
+  artifactName: BuilderSuite-Pro.${ext}
+
+win:
+  icon: build/suite/icon.png
+  artifactName: BuilderSuite-Pro-Setup.${ext}
+
+nsis:
+  shortcutName: BuilderSuite Pro
