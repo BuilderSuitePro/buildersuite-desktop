@@ -2,8 +2,9 @@ import { app, dialog } from "electron";
 import electronUpdater from "electron-updater";
 import { TARGET } from "../targets";
 
-const { autoUpdater } = electronUpdater;
-
+// Deliberately not destructured at module scope: electron-updater builds its
+// platform updater the moment `autoUpdater` is touched, which would run before
+// the app is ready.
 const FOUR_HOURS = 4 * 60 * 60 * 1000;
 
 let promptOpen = false;
@@ -12,6 +13,8 @@ export function initAutoUpdater(): void {
   // Nothing to update in a dev run, and electron-updater throws without a
   // packaged app-update.yml.
   if (!app.isPackaged) return;
+
+  const { autoUpdater } = electronUpdater;
 
   // Both apps publish into one GitHub repo, so each needs its own channel.
   // Sharing a channel would let one app install the other's build, which is the

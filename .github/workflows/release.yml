@@ -34,8 +34,19 @@ jobs:
 
       - run: npm ci
 
+      # The macOS DMG step intermittently fails inside dmgbuild with a plistlib
+      # error from hdiutil. It succeeds on a retry.
       - name: Build and publish ${{ matrix.target }}
-        run: npx electron-builder -c electron-builder.${{ matrix.target }}.yml --publish always
+        shell: bash
+        run: |
+          for attempt in 1 2 3; do
+            if npx electron-builder -c electron-builder.${{ matrix.target }}.yml --publish always; then
+              exit 0
+            fi
+            echo "attempt $attempt failed, retrying"
+            sleep 10
+          done
+          exit 1
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
