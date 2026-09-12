@@ -1,9 +1,25 @@
 import { shell, type WebContents } from "electron";
 
-// The app content lives on buildersuitepro.com. Sign-in is an OIDC redirect to a
-// tenant-specific subdomain of hercules-auth.com, so it must be allowed to load
-// in-window or authentication breaks. The tenant id is not hardcoded.
-const ALLOWED_SUFFIXES = ["buildersuitepro.com", "hercules-auth.com"];
+// The app content lives on buildersuitepro.com. Sign-in is an OIDC redirect
+// chain: the site hands off to the Hercules Auth portal (auth.buildersuitepro.com
+// today, or a tenant subdomain of hercules-auth.com, which is not knowable in
+// advance), and the portal hands off to the identity provider the user picked.
+// Every hop has to stay in-window, or sign-in completes in the system browser
+// and the app window is left signed out.
+//
+// A leading dot means "subdomains only"; everything else is an exact host.
+const ALLOWED_HOSTS = [
+  "buildersuitepro.com",
+  ".buildersuitepro.com",
+  ".hercules-auth.com",
+  "accounts.google.com",
+  "accounts.youtube.com",
+  "login.microsoftonline.com",
+  "login.live.com",
+  "appleid.apple.com",
+  "www.facebook.com",
+  "www.linkedin.com",
+];
 
 export function isInternalUrl(value: string): boolean {
   let url: URL;
@@ -15,8 +31,8 @@ export function isInternalUrl(value: string): boolean {
   if (url.protocol !== "https:") return false;
 
   const host = url.hostname.toLowerCase();
-  return ALLOWED_SUFFIXES.some(
-    (suffix) => host === suffix || host.endsWith(`.${suffix}`),
+  return ALLOWED_HOSTS.some((entry) =>
+    entry.startsWith(".") ? host.endsWith(entry) : host === entry,
   );
 }
 
