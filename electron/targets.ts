@@ -41,7 +41,9 @@ export const TARGETS: Record<TargetId, Target> = {
     id: "teams",
     productName: "BuilderTeams",
     appId: "com.kingdomtexas.builderteams",
-    url: "https://buildersuitepro.com/messages/popout",
+    // Site root, not /messages/popout: the shared auth handshake runs there and
+    // the web app renders chat on every route once __BSP_TARGET__ is "teams".
+    url: "https://buildersuitepro.com/",
     width: 420,
     height: 760,
     minWidth: 360,
@@ -61,4 +63,7 @@ function resolveTargetId(): TargetId {
   return id === "teams" ? "teams" : "suite";
 }
 
-export const TARGET: Target = TARGETS[resolveTargetId()];
+/** Exported on its own so the preload can expose it without pulling in TARGETS. */
+export const TARGET_ID: TargetId = resolveTargetId();
+
+export const TARGET: Target = TARGETS[TARGET_ID];
