@@ -43,17 +43,24 @@ jobs:
         env:
           BSP_TARGET: ${{ matrix.target }}
 
+      # The same certificate imports cleanly with `security import` locally, but
+      # electron-builder's own keychain setup dies on the runners at
+      # `security set-key-partition-list`. This action builds the keychain
+      # itself and leaves a usable identity in the search list, which
+      # electron-builder then picks up by auto-discovery — so CSC_LINK and
+      # CSC_KEY_PASSWORD are deliberately not passed to the build below.
+      - name: Import Developer ID certificate
+        if: runner.os == 'macOS'
+        uses: apple-actions/import-codesign-certs@v7
+        with:
+          p12-file-base64: ${{ secrets.CSC_LINK }}
+          p12-password: ${{ secrets.CSC_KEY_PASSWORD }}
+
       # The macOS DMG step intermittently fails inside dmgbuild with a plistlib
       # error from hdiutil. It succeeds on a retry.
       - name: Build and publish ${{ matrix.target }}
         shell: bash
         run: |
-          # electron-builder falls back to CSC_LINK when WIN_CSC_LINK is unset,
-          # so the mac Developer ID would be used to sign the NSIS installer.
-          # Unset rather than blank: an empty CSC_LINK is resolved as a path.
-          if [ "${{ runner.os }}" = "Windows" ]; then
-            unset CSC_LINK CSC_KEY_PASSWORD
-          fi
           for attempt in 1 2 3; do
             if npx electron-builder -c electron-builder.${{ matrix.target }}.yml --publish always; then
               exit 0
@@ -77,9 +84,8 @@ jobs:
           # AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
           # AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
 
-          # Mac — Developer ID plus notarization
+          # Mac — notarization only. The signing identity comes from the
+          # keychain built by the import step above, not from CSC_LINK.
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          CSC_LINK: ${{ secrets.CSC_LINK }}
-          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
