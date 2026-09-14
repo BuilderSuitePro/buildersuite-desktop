@@ -48,6 +48,12 @@ jobs:
       - name: Build and publish ${{ matrix.target }}
         shell: bash
         run: |
+          # electron-builder falls back to CSC_LINK when WIN_CSC_LINK is unset,
+          # so the mac Developer ID would be used to sign the NSIS installer.
+          # Unset rather than blank: an empty CSC_LINK is resolved as a path.
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            unset CSC_LINK CSC_KEY_PASSWORD
+          fi
           for attempt in 1 2 3; do
             if npx electron-builder -c electron-builder.${{ matrix.target }}.yml --publish always; then
               exit 0
