@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { app, ipcMain } from "electron";
 import { TARGET } from "../targets";
 import { applyBadgeCount } from "./badge";
@@ -13,6 +14,13 @@ import { createMainWindow, getMainWindow, showMainWindow } from "./window";
 // Windows needs this before any window or notification exists, or toasts are
 // attributed to "Electron" and the two apps share one taskbar group.
 app.setAppUserModelId(TARGET.appId);
+
+// userData defaults to the package name, which is shared by both targets. That
+// would give them one directory, and with it one instance lock and one cookie
+// jar, so launching the second app would silently exit. Must run before
+// requestSingleInstanceLock() below, which resolves the lock from this path.
+app.setName(TARGET.productName);
+app.setPath("userData", join(app.getPath("appData"), TARGET.productName));
 
 // Second launch should surface the running app rather than start another copy.
 if (!app.requestSingleInstanceLock()) {
