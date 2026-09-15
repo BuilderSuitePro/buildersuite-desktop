@@ -2,6 +2,7 @@ import { join } from "node:path";
 import { BrowserWindow, screen, shell } from "electron";
 import { TARGET } from "../targets";
 import { windowStore } from "./store";
+import { applyFocusBridge } from "./focus-bridge";
 import { applyNavigationPolicy } from "./navigation";
 
 let mainWindow: BrowserWindow | null = null;
@@ -67,6 +68,11 @@ export function createMainWindow(startHidden = false): BrowserWindow {
       // security hole.
       contextIsolation: true,
       nodeIntegration: false,
+      // Chromium throttles timers and rendering in a window that is hidden or
+      // minimised. That is the state this app spends most of its life in, and
+      // it is precisely when the page has to keep its connection alive and
+      // raise notifications promptly, so the throttling is turned off.
+      backgroundThrottling: false,
       // Default persistent session on purpose: the OIDC session cookie has to
       // survive a restart. A custom or in-memory partition signs the user out
       // on every launch.
@@ -99,6 +105,7 @@ export function createMainWindow(startHidden = false): BrowserWindow {
   });
 
   applyNavigationPolicy(win.webContents);
+  applyFocusBridge(win.webContents);
 
   void win.loadURL(TARGET.url);
 

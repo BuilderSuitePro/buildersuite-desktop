@@ -99,6 +99,10 @@ function registerIpc(): void {
     applyBadgeCount(Number.isFinite(count) ? count : 0, getMainWindow());
   });
 
+  // Raised by the window.focus wrapper in focus-bridge.ts when the web app
+  // reacts to a notification click.
+  ipcMain.on("bsp:show-window", () => showMainWindow());
+
   ipcMain.handle("bsp:get-settings", () => ({
     ...getSettings(),
     productName: TARGET.productName,

@@ -26,6 +26,14 @@ contextBridge.exposeInMainWorld("__BSP_DESKTOP_BADGE__", (count: unknown) => {
   ipcRenderer.send("bsp:badge-count", Number.isFinite(value) ? value : 0);
 });
 
+/**
+ * Surfaces the window from the renderer. See main/focus-bridge.ts for why the
+ * web app's own window.focus() cannot do this on its own.
+ */
+contextBridge.exposeInMainWorld("__BSP_DESKTOP_SHOW__", () => {
+  ipcRenderer.send("bsp:show-window");
+});
+
 // Used only by this project's own settings window.
 contextBridge.exposeInMainWorld("bspDesktop", {
   getSettings: () => ipcRenderer.invoke("bsp:get-settings"),

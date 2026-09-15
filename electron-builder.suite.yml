@@ -5,7 +5,6 @@ appId: com.kingdomtexas.buildersuitepro
 
 directories:
   output: dist/suite
-  # icon.png here is converted to .ico and .icns automatically.
   buildResources: build/suite
 
 extraResources:
@@ -25,12 +24,19 @@ publish:
     updaterCacheDirName: buildersuite-pro-updater
 
 mac:
-  icon: build/suite/icon.png
+  # A prebuilt .icns, not a PNG. electron-builder can convert a single 1024px
+  # PNG itself, but then every size in the set carries the same artwork and the
+  # blueprint hairlines turn to mush below 32px. scripts/prepare-assets.mjs
+  # builds the set with simplified art in the small slots.
+  icon: build/suite/icon.icns
   # No version number: the download link must stay valid across releases.
   artifactName: BuilderSuite-Pro.${ext}
 
 win:
-  icon: build/suite/icon.png
+  # Deliberately not the mac icon. Windows draws the icon as-is rather than
+  # masking it to a rounded shape, so the mac tile's transparent padding would
+  # render small and floaty in the taskbar; icon-win.png is full-bleed.
+  icon: build/suite/icon-win.png
   artifactName: BuilderSuite-Pro-Setup.${ext}
 
 nsis:
