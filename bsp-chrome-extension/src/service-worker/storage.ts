@@ -11,6 +11,8 @@ import type {
   DraftRecord,
   PendingSave,
   PendingCandidate,
+  UploadTicket,
+  UploadTicketsRecord,
 } from "../types/index.js";
 
 const SETTINGS_KEY = "bsp_settings";
@@ -20,6 +22,7 @@ const PENDING_SAVE_KEY = "bsp_pending_save";
 export const PENDING_CANDIDATE_KEY = "bsp_pending_candidate";
 const GRANTED_ORIGINS_KEY = "bsp_granted_origins";
 const ALL_SITES_ENABLED_KEY = "bsp_all_sites_enabled";
+export const UPLOAD_TICKETS_KEY = "uploadTickets";
 
 export async function loadSettings(): Promise<BspSettings | null> {
   const result = await chrome.storage.local.get(SETTINGS_KEY);
@@ -132,4 +135,42 @@ export async function saveAllSitesEnabled(value: boolean): Promise<void> {
 
 export async function clearAllSitesEnabled(): Promise<void> {
   await chrome.storage.local.remove(ALL_SITES_ENABLED_KEY);
+}
+
+// ─── Upload Tickets ───────────────────────────────────────────────────────────
+
+export async function loadUploadTickets(): Promise<UploadTicketsRecord> {
+  const result = await chrome.storage.local.get(UPLOAD_TICKETS_KEY);
+  return (result[UPLOAD_TICKETS_KEY] as UploadTicketsRecord | undefined) ?? {};
+}
+
+export async function saveUploadTickets(tickets: UploadTicketsRecord): Promise<void> {
+  await chrome.storage.local.set({ [UPLOAD_TICKETS_KEY]: tickets });
+}
+
+export async function upsertUploadTicket(ticket: UploadTicket): Promise<void> {
+  const tickets = await loadUploadTickets();
+  tickets[ticket.uploadId] = ticket;
+  await saveUploadTickets(tickets);
+}
+
+export async function updateUploadTicketState(
+  uploadId: string,
+  state: UploadTicket["state"],
+  storageId?: string | null
+): Promise<void> {
+  const tickets = await loadUploadTickets();
+  const ticket = tickets[uploadId];
+  if (!ticket) return;
+  ticket.state = state;
+  if (storageId !== undefined) {
+    ticket.storageId = storageId;
+  }
+  await saveUploadTickets(tickets);
+}
+
+export async function removeUploadTicket(uploadId: string): Promise<void> {
+  const tickets = await loadUploadTickets();
+  delete tickets[uploadId];
+  await saveUploadTickets(tickets);
 }

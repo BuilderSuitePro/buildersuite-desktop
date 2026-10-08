@@ -301,7 +301,8 @@ import type { ProductSavePayload } from "../types/index.js";
 /** Build the save payload from form state. Omits blank optional fields. */
 export function buildSavePayload(
   form: ProductFormState,
-  requestId: string
+  requestId: string,
+  uploadIds: string[] = []
 ): ProductSavePayload {
   const selectedImageUrls = form.imageUrls
     .filter((_, i) => form.selectedImageIndexes[i])
@@ -370,6 +371,6 @@ export function buildSavePayload(
     operation: "save",
     requestId,
     product,
-    uploadIds: [],
+    uploadIds: uploadIds.slice(0, 15),
   };
 }
