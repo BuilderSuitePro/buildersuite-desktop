@@ -17,8 +17,9 @@ const SETTINGS_KEY = "bsp_settings";
 const VERIFICATION_KEY = "bsp_verification";
 const DRAFT_KEY = "bsp_draft";
 const PENDING_SAVE_KEY = "bsp_pending_save";
-const PENDING_CANDIDATE_KEY = "bsp_pending_candidate";
+export const PENDING_CANDIDATE_KEY = "bsp_pending_candidate";
 const GRANTED_ORIGINS_KEY = "bsp_granted_origins";
+const ALL_SITES_ENABLED_KEY = "bsp_all_sites_enabled";
 
 export async function loadSettings(): Promise<BspSettings | null> {
   const result = await chrome.storage.local.get(SETTINGS_KEY);
@@ -116,4 +117,19 @@ export async function removeGrantedOrigin(origin: string): Promise<void> {
   const origins = await loadGrantedOrigins();
   origins.delete(origin);
   await saveGrantedOrigins(origins);
+}
+
+// ─── All-sites hover permission flag ─────────────────────────────────────────
+
+export async function loadAllSitesEnabled(): Promise<boolean> {
+  const result = await chrome.storage.local.get(ALL_SITES_ENABLED_KEY);
+  return result[ALL_SITES_ENABLED_KEY] === true;
+}
+
+export async function saveAllSitesEnabled(value: boolean): Promise<void> {
+  await chrome.storage.local.set({ [ALL_SITES_ENABLED_KEY]: value });
+}
+
+export async function clearAllSitesEnabled(): Promise<void> {
+  await chrome.storage.local.remove(ALL_SITES_ENABLED_KEY);
 }
