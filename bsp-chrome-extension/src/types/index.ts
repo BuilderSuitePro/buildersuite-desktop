@@ -145,6 +145,42 @@ export interface SaveApiResponse {
   selectionPath?: string;
 }
 
+// ─── Pending Candidate ────────────────────────────────────────────────────────
+
+/**
+ * Snapshot of the product context captured when the hover button is clicked.
+ * Written by the content script (via service worker relay) and consumed by the panel.
+ * NEVER contains the connection key or any credentials.
+ */
+export interface PendingCandidate {
+  imageUrl: string;
+  altText?: string;
+  sourceUrl: string;
+  /** URL of the specific product card link (may differ from sourceUrl on list pages) */
+  cardLink?: string;
+  /** Title extracted from the card context */
+  cardTitle?: string;
+  /** Price extracted from the card context */
+  cardPrice?: number;
+  /** Unix ms timestamp of when the capture was initiated */
+  timestamp: number;
+  /** The tab that originated the capture */
+  tabId: number;
+  /** Whether this came from a product detail page (vs a list/category page) */
+  isDetailPage?: boolean;
+}
+
+// ─── Granted Origins ──────────────────────────────────────────────────────────
+
+/**
+ * Origins where the user has explicitly enabled hover picking.
+ * Keys are HTTPS origins like "https://example.com".
+ * Stored in chrome.storage.local.
+ */
+export interface GrantedOriginsRecord {
+  origins: string[];
+}
+
 // ─── Messages (side panel ↔ service worker) ──────────────────────────────────
 
 export type MessageType =
@@ -156,7 +192,13 @@ export type MessageType =
   | "SAVE_PRODUCT"
   | "LOAD_DRAFT"
   | "SAVE_DRAFT"
-  | "CLEAR_DRAFT";
+  | "CLEAR_DRAFT"
+  | "HOVER_IMAGE_CLICKED"
+  | "ENABLE_HOVER_ON_SITE"
+  | "DISABLE_HOVER_ON_SITE"
+  | "GET_HOVER_SITE_STATE"
+  | "GET_PENDING_CANDIDATE"
+  | "CLEAR_PENDING_CANDIDATE";
 
 export interface BaseMessage {
   type: MessageType;
@@ -202,6 +244,34 @@ export interface ClearDraftMessage extends BaseMessage {
   type: "CLEAR_DRAFT";
 }
 
+export interface HoverImageClickedMessage extends BaseMessage {
+  type: "HOVER_IMAGE_CLICKED";
+  candidate: PendingCandidate;
+}
+
+export interface EnableHoverOnSiteMessage extends BaseMessage {
+  type: "ENABLE_HOVER_ON_SITE";
+  origin: string;
+}
+
+export interface DisableHoverOnSiteMessage extends BaseMessage {
+  type: "DISABLE_HOVER_ON_SITE";
+  origin: string;
+}
+
+export interface GetHoverSiteStateMessage extends BaseMessage {
+  type: "GET_HOVER_SITE_STATE";
+  origin: string;
+}
+
+export interface GetPendingCandidateMessage extends BaseMessage {
+  type: "GET_PENDING_CANDIDATE";
+}
+
+export interface ClearPendingCandidateMessage extends BaseMessage {
+  type: "CLEAR_PENDING_CANDIDATE";
+}
+
 export type ExtensionMessage =
   | LoadSettingsMessage
   | SaveSettingsMessage
@@ -211,7 +281,13 @@ export type ExtensionMessage =
   | SaveProductMessage
   | LoadDraftMessage
   | SaveDraftMessage
-  | ClearDraftMessage;
+  | ClearDraftMessage
+  | HoverImageClickedMessage
+  | EnableHoverOnSiteMessage
+  | DisableHoverOnSiteMessage
+  | GetHoverSiteStateMessage
+  | GetPendingCandidateMessage
+  | ClearPendingCandidateMessage;
 
 // ─── Content Script Messages ──────────────────────────────────────────────────
 
@@ -219,7 +295,9 @@ export type ContentMessageType =
   | "EXTRACT_PRODUCT"
   | "START_PICK_TEXT"
   | "START_PICK_IMAGE"
-  | "CANCEL_PICK";
+  | "CANCEL_PICK"
+  | "ENABLE_HOVER"
+  | "DISABLE_HOVER";
 
 export interface ContentExtractMessage {
   type: "EXTRACT_PRODUCT";
@@ -237,11 +315,21 @@ export interface ContentCancelPickMessage {
   type: "CANCEL_PICK";
 }
 
+export interface ContentEnableHoverMessage {
+  type: "ENABLE_HOVER";
+}
+
+export interface ContentDisableHoverMessage {
+  type: "DISABLE_HOVER";
+}
+
 export type ContentMessage =
   | ContentExtractMessage
   | ContentPickTextMessage
   | ContentPickImageMessage
-  | ContentCancelPickMessage;
+  | ContentCancelPickMessage
+  | ContentEnableHoverMessage
+  | ContentDisableHoverMessage;
 
 // ─── Message Responses ────────────────────────────────────────────────────────
 

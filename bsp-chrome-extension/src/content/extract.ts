@@ -17,6 +17,12 @@ import type {
   ContentMessage,
   MessageResponse,
 } from "../types/index.js";
+import {
+  initHoverOverlay,
+  enableHover,
+  disableHover,
+  destroyHoverOverlay,
+} from "./hover.js";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -312,7 +318,7 @@ function extractFromOg(pageUrl: string): Partial<ExtractionResult> {
 
 // ─── DOM / Shadow Traversal ───────────────────────────────────────────────────
 
-function collectTextFromShadowRoots(
+function _collectTextFromShadowRoots(
   root: Element | ShadowRoot,
   depth: number,
   results: string[]
@@ -321,10 +327,12 @@ function collectTextFromShadowRoots(
   const children = root.querySelectorAll("*");
   for (const child of children) {
     if (child.shadowRoot) {
-      collectTextFromShadowRoots(child.shadowRoot, depth + 1, results);
+      _collectTextFromShadowRoots(child.shadowRoot, depth + 1, results);
     }
   }
 }
+// Reserved for future shadow-root text extraction — not currently called
+void _collectTextFromShadowRoots;
 
 function isOwnOverlay(el: Element): boolean {
   return (
@@ -523,7 +531,9 @@ export function extractProduct(): ExtractionResult {
   let merged: Partial<ExtractionResult> = {};
   merged = mergeResults(merged, domResult);
   merged = mergeResults(merged, ogResult);
-  merged = mergeResults(merged, jsonLdResult);
+  if (jsonLdResult !== null) {
+    merged = mergeResults(merged, jsonLdResult);
+  }
 
   // Determine source URL
   const sourceUrl = merged.sourceUrl || pageUrl;
@@ -718,10 +728,52 @@ chrome.runtime.onMessage.addListener(
         return false;
       }
 
+      case "ENABLE_HOVER": {
+        enableHover();
+        sendResponse({ ok: true, data: null });
+        return false;
+      }
+
+      case "DISABLE_HOVER": {
+        disableHover();
+        sendResponse({ ok: true, data: null });
+        return false;
+      }
+
       default:
         return false;
     }
   }
 );
+
+// ─── Hover overlay initialization ────────────────────────────────────────────
+
+// Initialize the hover overlay (dormant by default).
+// The service worker will send ENABLE_HOVER if this origin has hover permitted.
+const bspLogoUrl = chrome.runtime.getURL("icons/bsp-logo.png");
+initHoverOverlay(bspLogoUrl);
+
+// Query service worker for the current site's hover state on init
+(function checkHoverState() {
+  try {
+    const origin = window.location.origin;
+    chrome.runtime.sendMessage(
+      { type: "GET_HOVER_SITE_STATE", origin },
+      (response: MessageResponse<{ isEnabled: boolean }>) => {
+        if (chrome.runtime.lastError) return; // SW not ready yet — ignore
+        if (response?.ok && response.data?.isEnabled) {
+          enableHover();
+        }
+      }
+    );
+  } catch {
+    // Ignore errors from restricted pages (chrome://, chrome-extension://)
+  }
+})();
+
+// Cleanup on page unload (SPA navigation)
+window.addEventListener("pagehide", () => {
+  destroyHoverOverlay();
+});
 
 export {};

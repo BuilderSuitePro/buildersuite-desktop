@@ -10,12 +10,15 @@ import type {
   VerificationState,
   DraftRecord,
   PendingSave,
+  PendingCandidate,
 } from "../types/index.js";
 
 const SETTINGS_KEY = "bsp_settings";
 const VERIFICATION_KEY = "bsp_verification";
 const DRAFT_KEY = "bsp_draft";
 const PENDING_SAVE_KEY = "bsp_pending_save";
+const PENDING_CANDIDATE_KEY = "bsp_pending_candidate";
+const GRANTED_ORIGINS_KEY = "bsp_granted_origins";
 
 export async function loadSettings(): Promise<BspSettings | null> {
   const result = await chrome.storage.local.get(SETTINGS_KEY);
@@ -73,4 +76,44 @@ export async function savePendingSave(pending: PendingSave): Promise<void> {
 
 export async function clearPendingSave(): Promise<void> {
   await chrome.storage.local.remove(PENDING_SAVE_KEY);
+}
+
+// ─── Pending Candidate (hover click capture) ──────────────────────────────────
+
+export async function loadPendingCandidate(): Promise<PendingCandidate | null> {
+  const result = await chrome.storage.local.get(PENDING_CANDIDATE_KEY);
+  const raw = result[PENDING_CANDIDATE_KEY] as PendingCandidate | undefined;
+  return raw ?? null;
+}
+
+export async function savePendingCandidate(candidate: PendingCandidate): Promise<void> {
+  await chrome.storage.local.set({ [PENDING_CANDIDATE_KEY]: candidate });
+}
+
+export async function clearPendingCandidate(): Promise<void> {
+  await chrome.storage.local.remove(PENDING_CANDIDATE_KEY);
+}
+
+// ─── Granted Origins (per-site hover permission) ──────────────────────────────
+
+export async function loadGrantedOrigins(): Promise<Set<string>> {
+  const result = await chrome.storage.local.get(GRANTED_ORIGINS_KEY);
+  const raw = result[GRANTED_ORIGINS_KEY] as string[] | undefined;
+  return new Set(raw ?? []);
+}
+
+export async function saveGrantedOrigins(origins: Set<string>): Promise<void> {
+  await chrome.storage.local.set({ [GRANTED_ORIGINS_KEY]: [...origins] });
+}
+
+export async function addGrantedOrigin(origin: string): Promise<void> {
+  const origins = await loadGrantedOrigins();
+  origins.add(origin);
+  await saveGrantedOrigins(origins);
+}
+
+export async function removeGrantedOrigin(origin: string): Promise<void> {
+  const origins = await loadGrantedOrigins();
+  origins.delete(origin);
+  await saveGrantedOrigins(origins);
 }
