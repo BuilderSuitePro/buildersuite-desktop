@@ -13,6 +13,7 @@ import type {
   SaveApiResponse,
   DraftRecord,
   PendingCandidate,
+  UploadTicket,
 } from "../types/index.js";
 import {
   loadSettings,
@@ -36,8 +37,18 @@ import {
   loadAllSitesEnabled,
   saveAllSitesEnabled,
   clearAllSitesEnabled,
+  upsertUploadTicket,
+  updateUploadTicketState,
+  loadUploadTickets,
 } from "./storage.js";
-import { verifyConnection, saveProduct, ApiError } from "./api.js";
+import {
+  verifyConnection,
+  saveProduct,
+  beginUpload,
+  finishUpload,
+  discardUpload,
+  ApiError,
+} from "./api.js";
 
 /** Returns true only for messages sent from this extension's own contexts. */
 function isTrustedSender(sender: chrome.runtime.MessageSender): boolean {
@@ -470,6 +481,98 @@ async function handleMessage(
         break;
       }
 
+      // ─── Upload operations ──────────────────────────────────────────────────
+
+      case "BEGIN_UPLOAD": {
+        const settings = await loadSettings();
+        if (!settings) {
+          sendResponse({ ok: false, error: "No settings saved yet" });
+          break;
+        }
+
+        try {
+          const result = await beginUpload(settings, {
+            operation: "begin",
+            kind: message.kind,
+            name: message.name,
+            sha256: message.sha256,
+          });
+
+          // Persist the ticket immediately with state="beginning"
+          const ticket: UploadTicket = {
+            uploadId: result.uploadId,
+            uploadUrl: result.uploadUrl,
+            storageId: null,
+            sha256: message.sha256,
+            name: message.name,
+            kind: message.kind,
+            state: "beginning",
+            createdAt: Date.now(),
+          };
+          await upsertUploadTicket(ticket);
+
+          sendResponse({ ok: true, data: { uploadId: result.uploadId, uploadUrl: result.uploadUrl } });
+        } catch (err) {
+          const errMsg = err instanceof ApiError ? err.message : "Begin upload failed";
+          sendResponse({ ok: false, error: errMsg });
+        }
+        break;
+      }
+
+      case "FINISH_UPLOAD": {
+        const finishSettings = await loadSettings();
+        if (!finishSettings) {
+          sendResponse({ ok: false, error: "No settings saved yet" });
+          break;
+        }
+
+        try {
+          const finishResult = await finishUpload(finishSettings, {
+            operation: "finish",
+            uploadId: message.uploadId,
+            storageId: message.storageId,
+          });
+
+          // Update ticket state to "ready"
+          await updateUploadTicketState(message.uploadId, "ready");
+
+          sendResponse({ ok: true, data: { uploadId: finishResult.uploadId } });
+        } catch (err) {
+          const errMsg = err instanceof ApiError ? err.message : "Finish upload failed";
+          sendResponse({ ok: false, error: errMsg });
+        }
+        break;
+      }
+
+      case "DISCARD_UPLOAD": {
+        const discardSettings = await loadSettings();
+        if (!discardSettings) {
+          sendResponse({ ok: false, error: "No settings saved yet" });
+          break;
+        }
+
+        try {
+          const discardResult = await discardUpload(discardSettings, {
+            operation: "discard",
+            uploadId: message.uploadId,
+          });
+
+          // discarded: false is ambiguous — may mean missing, foreign, or already attached.
+          // Mark the ticket as cleanup-needed if the discard was not confirmed.
+          if (discardResult.discarded) {
+            await updateUploadTicketState(message.uploadId, "cleanup-needed");
+          } else {
+            await updateUploadTicketState(message.uploadId, "cleanup-needed");
+          }
+
+          sendResponse({ ok: true, data: { discarded: discardResult.discarded } });
+        } catch (err) {
+          const errMsg = err instanceof ApiError ? err.message : "Discard upload failed";
+          sendResponse({ ok: false, error: errMsg });
+        }
+        break;
+      }
+
       default: {
         const _exhaustive: never = message;
         void _exhaustive;
@@ -479,6 +582,23 @@ async function handleMessage(
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : "Internal error";
     sendResponse({ ok: false, error: errMsg });
+  }
+}
+
+/**
+ * On SW startup, log any tickets stuck in "uploaded-awaiting-finish" state.
+ * These can be retried via the side panel's recovery UI on next open.
+ */
+async function logPendingFinishTickets(): Promise<void> {
+  const tickets = await loadUploadTickets();
+  const pending = Object.values(tickets).filter(
+    (t) => t.state === "uploaded-awaiting-finish" && t.uploadId && t.storageId
+  );
+  if (pending.length > 0) {
+    console.log(
+      `[BSP] ${pending.length} upload(s) pending finish on SW startup:`,
+      pending.map((t) => t.uploadId)
+    );
   }
 }
 
@@ -509,11 +629,13 @@ async function registerAllSitesContentScript(): Promise<void> {
 // granted the all-sites permission. Service workers restart frequently in MV3.
 chrome.runtime.onInstalled.addListener(() => {
   restoreAllSitesRegistrationIfGranted();
+  logPendingFinishTickets();
 });
 
 // Also re-register on any SW startup (onInstalled only fires on install/update)
 (async () => {
   await restoreAllSitesRegistrationIfGranted();
+  await logPendingFinishTickets();
 })();
 
 async function restoreAllSitesRegistrationIfGranted(): Promise<void> {

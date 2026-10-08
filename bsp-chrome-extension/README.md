@@ -83,11 +83,40 @@ Fill in the form fields manually. Required: **Product Title**.
 
 ## Image Slots
 
-The image grid shows 5 slots (1 cover + 4 additional). The **first image** (top-left) is always the cover image sent to BSP.
+The image grid shows 5 slots (1 cover + 4 additional). **Cover priority** follows the BSP backend rule:
+- The first **uploaded** (stored) image in order is always the cover when any uploads exist.
+- External image URLs are the cover only when there are no stored uploads.
 
-- **Pick from page** — click a crosshair mode to select an image on the current tab
-- **Add image URL** — paste a URL directly
-- **Upload file** — coming in a future release
+For each slot you can:
+- **Upload image** — opens a file picker (JPEG, PNG, WebP, GIF; max 10 MB). Shows validating → hashing → uploading → ready progress.
+- **Add image URL** — paste an external URL directly
+- **Pick from page** — click a crosshair to select an image on the current tab
+
+### Upload flow (per file)
+1. Local validation (MIME type, size, filename)
+2. SHA-256 fingerprint computed in-browser (standard base64, 44 chars)
+3. `begin` request to BSP API → returns an upload URL
+4. Ticket persisted to `chrome.storage.local` before bytes are sent
+5. Raw bytes POSTed to the upload URL (no BSP credentials sent here)
+6. `finish` request to BSP API → ticket becomes **ready**
+7. Ticket ID is included in the save `uploadIds` on the next Save
+
+**Unsupported formats:** SVG, HEIC/HEIF, and AVIF are rejected with an explanation. Convert to JPEG, PNG, or WebP before uploading.
+
+### Interruption recovery
+If the panel closes or the browser restarts after bytes are uploaded but before `finish` completes, a recovery banner appears on next open. Click **Retry** to complete the finish step without re-uploading.
+
+> **Known limitation:** If `finish` cannot be reached after multiple retries, the uploaded bytes may remain on the storage server ("orphaned bytes"). There is no cleanup endpoint — BSP support can assist if this becomes an issue.
+
+---
+
+## Attachments
+
+Expand the **Attachments** accordion to upload files (JPEG, PNG, WebP, GIF, or PDF; max 10 MB each). Up to 10 attachments per product.
+
+- Per-attachment progress indicator (state badge + upload %)
+- Remove button (triggers a `discard` API call; result shown truthfully)
+- All attachments are included in the save `uploadIds` after the images
 
 ---
 

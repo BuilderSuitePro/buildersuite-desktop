@@ -8,12 +8,24 @@ import type {
   DraftRecord,
   MessageResponse,
   PendingCandidate,
+  UploadTicket,
+  UploadTicketsRecord,
+  UploadState,
 } from "../../types/index.js";
 import {
   validateProductForm,
   buildSavePayload,
   computePricingPreview,
 } from "../../shared/validation.js";
+import {
+  validateUploadFile,
+  computeSha256Base64,
+  buildUploadIds,
+} from "../../shared/upload.js";
+
+const UPLOAD_TICKETS_KEY = "uploadTickets";
+const MAX_IMAGE_UPLOADS = 5;
+const MAX_ATTACHMENTS = 10;
 
 // ─── Default form state ───────────────────────────────────────────────────────
 
@@ -40,6 +52,8 @@ function defaultForm(sourceUrl = ""): ProductFormState {
     tags: "",
     imageUrls: [],
     selectedImageIndexes: [],
+    imageUploadIds: [],
+    attachmentIds: [],
   };
 }
 
@@ -542,6 +556,117 @@ const s: Record<string, React.CSSProperties> = {
     whiteSpace: "nowrap" as const,
     flexShrink: 0,
   },
+  // ── Upload-specific ──
+  slotProgress: {
+    position: "absolute" as const,
+    inset: 0,
+    display: "flex",
+    flexDirection: "column" as const,
+    alignItems: "center",
+    justifyContent: "center",
+    background: "rgba(255,255,255,0.92)",
+    gap: 4,
+    padding: 6,
+  },
+  slotProgressLabel: {
+    fontSize: 10,
+    color: "#555",
+    textAlign: "center" as const,
+  },
+  slotProgressBar: {
+    width: "80%",
+    height: 4,
+    background: "#e0e0e0",
+    borderRadius: 2,
+    overflow: "hidden",
+  },
+  slotProgressFill: {
+    height: "100%",
+    background: "#B8962E",
+    transition: "width 0.2s",
+  },
+  slotErrorBadge: {
+    position: "absolute" as const,
+    inset: 0,
+    display: "flex",
+    flexDirection: "column" as const,
+    alignItems: "center",
+    justifyContent: "center",
+    background: "rgba(253,236,234,0.95)",
+    padding: 6,
+    gap: 4,
+  },
+  slotErrorText: {
+    fontSize: 9,
+    color: "#721c24",
+    textAlign: "center" as const,
+    wordBreak: "break-word" as const,
+  },
+  slotRetryBtn: {
+    fontSize: 9,
+    padding: "2px 6px",
+    background: "#B8962E",
+    color: "#fff",
+    border: "none",
+    borderRadius: 3,
+    cursor: "pointer",
+  },
+  // ── Attachment section ──
+  attachmentRow: {
+    display: "flex",
+    alignItems: "center",
+    gap: 6,
+    padding: "5px 0",
+    borderBottom: "1px solid #f0f0f0",
+    fontSize: 12,
+  },
+  attachmentName: {
+    flex: 1,
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap" as const,
+    color: "#333",
+  },
+  attachmentSize: {
+    fontSize: 11,
+    color: "#aaa",
+    flexShrink: 0,
+  },
+  attachmentStateBadge: {
+    fontSize: 10,
+    padding: "1px 6px",
+    borderRadius: 8,
+    fontWeight: 600,
+    flexShrink: 0,
+  },
+  attachmentRemoveBtn: {
+    background: "none",
+    border: "none",
+    color: "#bbb",
+    cursor: "pointer",
+    fontSize: 14,
+    padding: "0 2px",
+    flexShrink: 0,
+    lineHeight: 1,
+  },
+  uploadFileBtn: {
+    fontSize: 12,
+    padding: "5px 10px",
+    background: "#f0f0f0",
+    border: "1px solid #ccc",
+    borderRadius: 4,
+    cursor: "pointer",
+    marginTop: 6,
+  },
+  recoveryBanner: {
+    background: "#fff3cd",
+    border: "1px solid #ffc107",
+    borderRadius: 5,
+    padding: "8px 10px",
+    fontSize: 12,
+    color: "#664d03",
+    marginBottom: 8,
+  },
 };
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
@@ -569,14 +694,55 @@ function Field({ label, error, autoFilled, children, style }: FieldProps) {
   );
 }
 
+// ─── Upload state badge helper ────────────────────────────────────────────────
+
+function stateBadgeStyle(state: UploadState): React.CSSProperties {
+  const base = s.attachmentStateBadge;
+  switch (state) {
+    case "beginning":
+    case "uploading":
+    case "uploaded-awaiting-finish":
+      return { ...base, background: "#e8f4fd", color: "#1a5c8a" };
+    case "ready":
+      return { ...base, background: "#eafaf1", color: "#1a7a45" };
+    case "attached":
+      return { ...base, background: "#f3f3f3", color: "#666" };
+    case "cleanup-needed":
+    case "local":
+      return { ...base, background: "#fdecea", color: "#721c24" };
+    default:
+      return base;
+  }
+}
+
+function stateLabel(state: UploadState, progress?: number): string {
+  switch (state) {
+    case "local": return "Pending";
+    case "beginning": return "Starting…";
+    case "uploading": return progress !== undefined ? `Uploading ${progress}%` : "Uploading…";
+    case "uploaded-awaiting-finish": return "Processing…";
+    case "ready": return "Ready";
+    case "attached": return "Saved";
+    case "cleanup-needed": return "Cleanup needed";
+    default: return state;
+  }
+}
+
+// ─── ImageSlot component ──────────────────────────────────────────────────────
+
 interface ImageSlotProps {
   index: number;
   url?: string;
   isCover?: boolean;
   isPrimary?: boolean;
+  uploadTicket?: UploadTicket;
+  uploadProgress?: number;
+  uploadError?: string;
   onRemove?: (i: number) => void;
   onPickFromPage?: () => void;
   onAddUrl?: (url: string) => void;
+  onUploadFile?: () => void;
+  onRetryUpload?: () => void;
   activeTabId?: number | null;
 }
 
@@ -585,9 +751,14 @@ function ImageSlot({
   url,
   isCover,
   isPrimary,
+  uploadTicket,
+  uploadProgress,
+  uploadError,
   onRemove,
   onPickFromPage,
   onAddUrl,
+  onUploadFile,
+  onRetryUpload,
   activeTabId,
 }: ImageSlotProps) {
   const [menuOpen, setMenuOpen] = useState(false);
@@ -607,6 +778,77 @@ function ImageSlot({
 
   const baseStyle = isPrimary ? s.primarySlot : s.secondarySlot;
 
+  // Uploaded image slot (ticket exists)
+  if (uploadTicket) {
+    const isInProgress =
+      uploadTicket.state === "beginning" ||
+      uploadTicket.state === "uploading" ||
+      uploadTicket.state === "uploaded-awaiting-finish";
+
+    // For preview, use object URL if we have local bytes (handled outside via previewUrls)
+    // url prop may be set to an object URL or undefined
+    return (
+      <div style={baseStyle} ref={slotRef}>
+        {url ? (
+          <img
+            src={url}
+            alt={uploadTicket.name}
+            style={s.slotImg}
+            onError={(e) => {
+              (e.target as HTMLImageElement).style.display = "none";
+            }}
+          />
+        ) : (
+          <div style={{ ...s.slotEmpty, background: "none", border: "none" }}>
+            <span style={{ fontSize: 18, color: "#ddd" }}>🖼</span>
+          </div>
+        )}
+
+        {isCover && uploadTicket.state === "ready" && (
+          <div style={s.slotCoverBadge}>Cover</div>
+        )}
+
+        {isInProgress && (
+          <div style={s.slotProgress}>
+            <span style={s.slotProgressLabel}>
+              {stateLabel(uploadTicket.state, uploadProgress)}
+            </span>
+            {uploadTicket.state === "uploading" && (
+              <div style={s.slotProgressBar}>
+                <div style={{ ...s.slotProgressFill, width: `${uploadProgress ?? 0}%` }} />
+              </div>
+            )}
+          </div>
+        )}
+
+        {uploadError && !isInProgress && (
+          <div style={s.slotErrorBadge}>
+            <span style={s.slotErrorText}>{uploadError}</span>
+            {onRetryUpload && (
+              <button style={s.slotRetryBtn} onClick={onRetryUpload} type="button">
+                Retry
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* Only allow removal if not attached */}
+        {onRemove && !isInProgress && uploadTicket.state !== "attached" && (
+          <button
+            style={s.slotRemoveBtn}
+            onClick={() => onRemove(index)}
+            type="button"
+            aria-label={`Remove image ${index + 1}`}
+            title="Remove"
+          >
+            ×
+          </button>
+        )}
+      </div>
+    );
+  }
+
+  // External URL image slot
   if (url) {
     return (
       <div style={baseStyle} ref={slotRef}>
@@ -651,6 +893,18 @@ function ImageSlot({
 
       {menuOpen && (
         <div style={s.slotMenu}>
+          {onUploadFile && (
+            <button
+              style={s.slotMenuItem}
+              type="button"
+              onClick={() => {
+                setMenuOpen(false);
+                onUploadFile();
+              }}
+            >
+              Upload image
+            </button>
+          )}
           {activeTabId && (
             <button
               style={s.slotMenuItem}
@@ -672,14 +926,6 @@ function ImageSlot({
             }}
           >
             Add image URL
-          </button>
-          <button
-            style={{ ...s.slotMenuItem, color: "#aaa" }}
-            type="button"
-            disabled
-            title="File uploads coming soon"
-          >
-            Upload file (coming soon)
           </button>
           <button
             style={{ ...s.slotMenuItem, color: "#888", fontSize: 11 }}
@@ -722,6 +968,54 @@ function ImageSlot({
       )}
     </div>
   );
+}
+
+// ─── Upload bytes helper ───────────────────────────────────────────────────────
+
+/**
+ * Upload raw file bytes to the given URL using XHR for progress tracking.
+ * CRITICAL: No Authorization header is attached — this posts to a storage service, not BSP.
+ */
+function uploadBytesWithProgress(
+  uploadUrl: string,
+  bytes: ArrayBuffer,
+  mimeType: string,
+  onProgress: (percent: number) => void
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", uploadUrl);
+    xhr.setRequestHeader("Content-Type", mimeType);
+    // No Authorization header — this is a storage service, not BSP
+
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) {
+        onProgress(Math.round((e.loaded / e.total) * 100));
+      }
+    };
+
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          const data = JSON.parse(xhr.responseText) as Record<string, unknown>;
+          const storageId = data["storageId"];
+          if (typeof storageId === "string" && storageId) {
+            resolve(storageId);
+          } else {
+            reject(new Error("Upload response missing storageId"));
+          }
+        } catch {
+          reject(new Error("Could not parse upload response JSON"));
+        }
+      } else {
+        reject(new Error(`Upload failed: HTTP ${xhr.status}`));
+      }
+    };
+
+    xhr.onerror = () => reject(new Error("Network error during upload"));
+    xhr.ontimeout = () => reject(new Error("Upload timed out"));
+    xhr.send(bytes);
+  });
 }
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -771,7 +1065,336 @@ export default function ProductForm({
   const [conflictPending, setConflictPending] = useState<PendingCandidate | null>(null);
   const [urlInput, setUrlInput] = useState("");
 
+  // ── Upload state ────────────────────────────────────────────────────────────
+  const [uploadTickets, setUploadTickets] = useState<UploadTicketsRecord>({});
+  const [uploadProgress, setUploadProgress] = useState<Record<string, number>>({});
+  const [uploadErrors, setUploadErrors] = useState<Record<string, string>>({});
+  const [previewUrls, setPreviewUrls] = useState<Record<string, string>>({}); // uploadId → object URL
+  const [recoveryTickets, setRecoveryTickets] = useState<UploadTicket[]>([]);
+  // Hidden file input refs
+  const imageFileInputRef = useRef<HTMLInputElement | null>(null);
+  const attachmentFileInputRef = useRef<HTMLInputElement | null>(null);
+  const pendingUploadKindRef = useRef<"image" | "attachment" | null>(null);
+  // Preview URL cleanup
+  const previewUrlsRef = useRef<Record<string, string>>({});
+
   const draftTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // ── Load tickets from storage ───────────────────────────────────────────────
+
+  useEffect(() => {
+    chrome.storage.local.get(UPLOAD_TICKETS_KEY, (result) => {
+      const tickets = (result[UPLOAD_TICKETS_KEY] as UploadTicketsRecord | undefined) ?? {};
+      setUploadTickets(tickets);
+
+      // Scan for recovery tickets
+      const pendingFinish = Object.values(tickets).filter(
+        (t) => t.state === "uploaded-awaiting-finish" && t.uploadId && t.storageId
+      );
+      if (pendingFinish.length > 0) {
+        setRecoveryTickets(pendingFinish);
+      }
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Cleanup preview object URLs on unmount
+  useEffect(() => {
+    return () => {
+      Object.values(previewUrlsRef.current).forEach((url) => URL.revokeObjectURL(url));
+    };
+  }, []);
+
+  // ── Ticket persistence helpers ──────────────────────────────────────────────
+
+  const persistTicket = useCallback((ticket: UploadTicket) => {
+    setUploadTickets((prev) => {
+      const updated = { ...prev, [ticket.uploadId]: ticket };
+      chrome.storage.local.set({ [UPLOAD_TICKETS_KEY]: updated });
+      return updated;
+    });
+  }, []);
+
+  const updateTicket = useCallback((uploadId: string, patch: Partial<UploadTicket>) => {
+    setUploadTickets((prev) => {
+      const existing = prev[uploadId];
+      if (!existing) return prev;
+      const updated = { ...prev, [uploadId]: { ...existing, ...patch } };
+      chrome.storage.local.set({ [UPLOAD_TICKETS_KEY]: updated });
+      return updated;
+    });
+  }, []);
+
+  const removeTicketFromStorage = useCallback((uploadId: string) => {
+    setUploadTickets((prev) => {
+      const updated = { ...prev };
+      delete updated[uploadId];
+      chrome.storage.local.set({ [UPLOAD_TICKETS_KEY]: updated });
+      return updated;
+    });
+  }, []);
+
+  // ── Upload flow ─────────────────────────────────────────────────────────────
+
+  const handleFileSelected = useCallback(async (file: File) => {
+    const kind = pendingUploadKindRef.current ?? "image";
+
+    // 1. Validate
+    const validation = validateUploadFile(file, kind);
+    if (!validation.valid) {
+      // Show error in a temp slot — use a synthetic key for display
+      const errKey = `err-${Date.now()}`;
+      setUploadErrors((prev) => ({ ...prev, [errKey]: validation.error! }));
+      setTimeout(() => {
+        setUploadErrors((prev) => {
+          const next = { ...prev };
+          delete next[errKey];
+          return next;
+        });
+      }, 8000);
+      return;
+    }
+
+    // 2. Check limits
+    if (kind === "image" && form.imageUploadIds.length >= MAX_IMAGE_UPLOADS) {
+      setUploadErrors((prev) => ({ ...prev, "limit-img": "Maximum 5 uploaded images reached." }));
+      return;
+    }
+    if (kind === "attachment" && form.attachmentIds.length >= MAX_ATTACHMENTS) {
+      setUploadErrors((prev) => ({ ...prev, "limit-att": "Maximum 10 attachments reached." }));
+      return;
+    }
+
+    // 3. Create preview object URL
+    const previewUrl = URL.createObjectURL(file);
+
+    // 4. Compute SHA-256
+    let sha256: string;
+    try {
+      const fileBytes = await file.arrayBuffer();
+      sha256 = await computeSha256Base64(fileBytes);
+    } catch {
+      setUploadErrors((prev) => ({ ...prev, "hash-err": "Failed to hash file." }));
+      URL.revokeObjectURL(previewUrl);
+      return;
+    }
+
+    // 5. BEGIN via service worker (credentials needed)
+    const beginResp = await new Promise<MessageResponse<{ uploadId: string; uploadUrl: string }>>(
+      (resolve) => {
+        chrome.runtime.sendMessage(
+          { type: "BEGIN_UPLOAD", kind, name: file.name, sha256 },
+          (resp) => {
+            if (chrome.runtime.lastError) {
+              resolve({ ok: false, error: chrome.runtime.lastError.message ?? "Begin failed" });
+            } else {
+              resolve(resp as MessageResponse<{ uploadId: string; uploadUrl: string }>);
+            }
+          }
+        );
+      }
+    );
+
+    if (!beginResp.ok) {
+      URL.revokeObjectURL(previewUrl);
+      setUploadErrors((prev) => ({ ...prev, "begin-err": beginResp.error }));
+      return;
+    }
+
+    const { uploadId, uploadUrl } = beginResp.data;
+
+    // 6. Ticket is already persisted by SW — sync local state
+    const ticket: UploadTicket = {
+      uploadId,
+      uploadUrl,
+      storageId: null,
+      sha256,
+      name: file.name,
+      kind,
+      state: "beginning",
+      createdAt: Date.now(),
+    };
+    persistTicket(ticket);
+
+    // Store preview URL
+    previewUrlsRef.current[uploadId] = previewUrl;
+    setPreviewUrls((prev) => ({ ...prev, [uploadId]: previewUrl }));
+
+    // 7. Add to form slot/attachment list
+    if (kind === "image") {
+      setForm((prev) => ({
+        ...prev,
+        imageUploadIds: [...prev.imageUploadIds, uploadId].slice(0, MAX_IMAGE_UPLOADS),
+      }));
+    } else {
+      setForm((prev) => ({
+        ...prev,
+        attachmentIds: [...prev.attachmentIds, uploadId].slice(0, MAX_ATTACHMENTS),
+      }));
+    }
+
+    // 8. Update to uploading state
+    updateTicket(uploadId, { state: "uploading" });
+    setUploadProgress((prev) => ({ ...prev, [uploadId]: 0 }));
+
+    // 9. Upload bytes directly (NO BSP auth header)
+    let storageId: string;
+    try {
+      storageId = await uploadBytesWithProgress(
+        uploadUrl,
+        await file.arrayBuffer(),
+        file.type,
+        (pct) => setUploadProgress((prev) => ({ ...prev, [uploadId]: pct }))
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Upload failed";
+      updateTicket(uploadId, { state: "cleanup-needed" });
+      setUploadErrors((prev) => ({ ...prev, [uploadId]: msg }));
+      return;
+    }
+
+    // 10. Update to uploaded-awaiting-finish with storageId
+    updateTicket(uploadId, { state: "uploaded-awaiting-finish", storageId });
+
+    // 11. FINISH via service worker
+    await doFinishUpload(uploadId, storageId);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.imageUploadIds.length, form.attachmentIds.length, persistTicket, updateTicket]);
+
+  const doFinishUpload = useCallback(async (uploadId: string, storageId: string) => {
+    const finishResp = await new Promise<MessageResponse<{ uploadId: string }>>((resolve) => {
+      chrome.runtime.sendMessage(
+        { type: "FINISH_UPLOAD", uploadId, storageId },
+        (resp) => {
+          if (chrome.runtime.lastError) {
+            resolve({ ok: false, error: chrome.runtime.lastError.message ?? "Finish failed" });
+          } else {
+            resolve(resp as MessageResponse<{ uploadId: string }>);
+          }
+        }
+      );
+    });
+
+    if (finishResp.ok) {
+      updateTicket(uploadId, { state: "ready" });
+      setUploadErrors((prev) => {
+        const next = { ...prev };
+        delete next[uploadId];
+        return next;
+      });
+    } else {
+      // Keep in uploaded-awaiting-finish state for recovery
+      setUploadErrors((prev) => ({
+        ...prev,
+        [uploadId]: `Finish failed: ${finishResp.error}. Bytes uploaded but not confirmed — retry to complete.`,
+      }));
+    }
+  }, [updateTicket]);
+
+  // ── Interruption recovery (retry finish) ───────────────────────────────────
+
+  const handleRetryFinish = useCallback(async (ticket: UploadTicket) => {
+    if (!ticket.storageId) return;
+    setUploadErrors((prev) => {
+      const next = { ...prev };
+      delete next[ticket.uploadId];
+      return next;
+    });
+    updateTicket(ticket.uploadId, { state: "uploaded-awaiting-finish" });
+    await doFinishUpload(ticket.uploadId, ticket.storageId);
+    setRecoveryTickets((prev) => prev.filter((t) => t.uploadId !== ticket.uploadId));
+  }, [doFinishUpload, updateTicket]);
+
+  // ── Upload file button handlers ─────────────────────────────────────────────
+
+  const triggerImageUpload = useCallback(() => {
+    pendingUploadKindRef.current = "image";
+    imageFileInputRef.current?.click();
+  }, []);
+
+  const triggerAttachmentUpload = useCallback(() => {
+    pendingUploadKindRef.current = "attachment";
+    attachmentFileInputRef.current?.click();
+  }, []);
+
+  const handleFileInputChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      if (file) handleFileSelected(file);
+      e.target.value = ""; // reset so same file can be selected again
+    },
+    [handleFileSelected]
+  );
+
+  // ── Remove upload ticket (with discard) ────────────────────────────────────
+
+  const handleRemoveUpload = useCallback(
+    async (uploadId: string) => {
+      const ticket = uploadTickets[uploadId];
+      if (!ticket) return;
+
+      // Never discard attached tickets
+      if (ticket.state === "attached") return;
+
+      // Remove from form state
+      setForm((prev) => ({
+        ...prev,
+        imageUploadIds: prev.imageUploadIds.filter((id) => id !== uploadId),
+        attachmentIds: prev.attachmentIds.filter((id) => id !== uploadId),
+      }));
+
+      // Revoke preview URL
+      if (previewUrlsRef.current[uploadId]) {
+        URL.revokeObjectURL(previewUrlsRef.current[uploadId]);
+        delete previewUrlsRef.current[uploadId];
+        setPreviewUrls((prev) => {
+          const next = { ...prev };
+          delete next[uploadId];
+          return next;
+        });
+      }
+
+      // If ticket is in "ready" state, attempt discard
+      if (ticket.state === "ready") {
+        const discardResp = await new Promise<MessageResponse<{ discarded: boolean }>>(
+          (resolve) => {
+            chrome.runtime.sendMessage(
+              { type: "DISCARD_UPLOAD", uploadId },
+              (resp) => {
+                if (chrome.runtime.lastError) {
+                  resolve({ ok: false, error: chrome.runtime.lastError.message ?? "Discard failed" });
+                } else {
+                  resolve(resp as MessageResponse<{ discarded: boolean }>);
+                }
+              }
+            );
+          }
+        );
+
+        if (!discardResp.ok) {
+          // discard API failed — ticket may be orphaned
+          updateTicket(uploadId, { state: "cleanup-needed" });
+          return;
+        }
+
+        // discarded: false is ambiguous — not confirmed success
+        if (!discardResp.data.discarded) {
+          // Mark as cleanup-needed; do not claim success
+          updateTicket(uploadId, { state: "cleanup-needed" });
+          return;
+        }
+      }
+
+      // Remove ticket from storage
+      removeTicketFromStorage(uploadId);
+      setUploadErrors((prev) => {
+        const next = { ...prev };
+        delete next[uploadId];
+        return next;
+      });
+    },
+    [uploadTickets, updateTicket, removeTicketFromStorage]
+  );
 
   // ── Load draft on mount ─────────────────────────────────────────────────────
 
@@ -815,13 +1438,7 @@ export default function ProductForm({
     if (pendingCandidate.imageUrl === "__CLEAR__") {
       const confirmed = window.confirm("Clear all fields? Your draft will also be cleared.");
       if (confirmed) {
-        setForm(defaultForm(activeTabUrl));
-        setAutoFilled(new Set());
-        setDraftBanner(null);
-        setPriceCandidates([]);
-        setCurrencyWarning(null);
-        setSaveState({ status: "idle" });
-        chrome.runtime.sendMessage({ type: "CLEAR_DRAFT" });
+        handleClearDraft();
       }
       onCandidateConsumed();
       return;
@@ -885,6 +1502,59 @@ export default function ProductForm({
     setAutoFilled(newAutoFilled);
     setDraftBanner("Hover capture — verify details before saving");
   }
+
+  // ── Clear draft (with upload discard) ─────────────────────────────────────
+
+  const handleClearDraft = useCallback(async () => {
+    // Discard all ready (not attached) tickets
+    const allIds = [...form.imageUploadIds, ...form.attachmentIds];
+    for (const uploadId of allIds) {
+      const ticket = uploadTickets[uploadId];
+      if (!ticket || ticket.state === "attached") continue;
+      if (ticket.state === "ready") {
+        // Best-effort discard — show result but continue clearing
+        const discardResp = await new Promise<MessageResponse<{ discarded: boolean }>>((resolve) => {
+          chrome.runtime.sendMessage(
+            { type: "DISCARD_UPLOAD", uploadId },
+            (resp) => {
+              if (chrome.runtime.lastError) {
+                resolve({ ok: false, error: chrome.runtime.lastError.message ?? "Discard failed" });
+              } else {
+                resolve(resp as MessageResponse<{ discarded: boolean }>);
+              }
+            }
+          );
+        });
+
+        if (!discardResp.ok || !discardResp.data?.discarded) {
+          // Mark as cleanup-needed; bytes may be orphaned
+          updateTicket(uploadId, { state: "cleanup-needed" });
+        } else {
+          removeTicketFromStorage(uploadId);
+        }
+      } else {
+        // In-progress or other non-ready — just mark cleanup-needed
+        updateTicket(uploadId, { state: "cleanup-needed" });
+      }
+
+      // Revoke preview
+      if (previewUrlsRef.current[uploadId]) {
+        URL.revokeObjectURL(previewUrlsRef.current[uploadId]);
+        delete previewUrlsRef.current[uploadId];
+      }
+    }
+    setPreviewUrls({});
+
+    setForm(defaultForm(activeTabUrl));
+    setAutoFilled(new Set());
+    setDraftBanner(null);
+    setPriceCandidates([]);
+    setCurrencyWarning(null);
+    setSaveState({ status: "idle" });
+    setUploadErrors({});
+    chrome.runtime.sendMessage({ type: "CLEAR_DRAFT" });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.imageUploadIds, form.attachmentIds, uploadTickets, updateTicket, removeTicketFromStorage, activeTabUrl]);
 
   // ── Auto-save draft ────────────────────────────────────────────────────────
 
@@ -1048,7 +1718,7 @@ export default function ProductForm({
     }
   }
 
-  // ── Image management ──────────────────────────────────────────────────────
+  // ── Image management (external URLs) ──────────────────────────────────────
 
   function addImageUrl(url: string) {
     const trimmed = url.trim();
@@ -1076,10 +1746,25 @@ export default function ProductForm({
 
   const hasErrors = Object.keys(errors).length > 0;
 
+  // Collect ready uploadIds for the save payload
+  const readyUploadIds = new Set(
+    Object.values(uploadTickets)
+      .filter((t) => t.state === "ready")
+      .map((t) => t.uploadId)
+  );
+  const saveUploadIds = buildUploadIds(form.imageUploadIds, form.attachmentIds, readyUploadIds);
+
+  // Block save while any upload is in-progress
+  const hasInProgressUploads = Object.values(uploadTickets).some(
+    (t) =>
+      (form.imageUploadIds.includes(t.uploadId) || form.attachmentIds.includes(t.uploadId)) &&
+      (t.state === "beginning" || t.state === "uploading" || t.state === "uploaded-awaiting-finish")
+  );
+
   async function handleSave() {
-    if (hasErrors || saveState.status === "saving") return;
+    if (hasErrors || saveState.status === "saving" || hasInProgressUploads) return;
     const requestId = crypto.randomUUID();
-    const payload = buildSavePayload(form, requestId);
+    const payload = buildSavePayload(form, requestId, saveUploadIds);
     await doSave(payload);
   }
 
@@ -1104,6 +1789,11 @@ export default function ProductForm({
       const data = response.data;
       setSaveState({ status: "success", materialId: data.materialId, path: data.path, replayed: data.replayed });
       chrome.runtime.sendMessage({ type: "CLEAR_DRAFT" });
+
+      // Mark all included upload tickets as "attached"
+      for (const uploadId of payload.uploadIds) {
+        updateTicket(uploadId, { state: "attached" });
+      }
     } else {
       const errMsg = response.error ?? "Save failed";
       if (errMsg.startsWith("UNKNOWN:")) {
@@ -1121,7 +1811,7 @@ export default function ProductForm({
   // ── Derived ───────────────────────────────────────────────────────────────
 
   const isSaving = saveState.status === "saving";
-  const saveDisabled = hasErrors || isSaving || !isConnected;
+  const saveDisabled = hasErrors || isSaving || !isConnected || hasInProgressUploads;
 
   const libraryLink =
     saveState.status === "success" && bspOrigin
@@ -1131,14 +1821,63 @@ export default function ProductForm({
   // Map form images to the 5-slot grid (cover + 4)
   const SLOT_COUNT = 5;
   const selectedUrls = form.imageUrls.filter((_, i) => form.selectedImageIndexes[i]);
-  const usedCount = selectedUrls.length;
 
+  // Build slot data: uploads first, then external URLs
+  type SlotData =
+    | { type: "upload"; uploadId: string; previewUrl?: string }
+    | { type: "url"; url: string; urlIndex: number }
+    | { type: "empty" };
+
+  const slotData: SlotData[] = [];
+  for (const uid of form.imageUploadIds) {
+    if (slotData.length >= SLOT_COUNT) break;
+    slotData.push({ type: "upload", uploadId: uid, previewUrl: previewUrls[uid] });
+  }
+  const selectedExternalUrls = form.imageUrls
+    .map((url, i) => ({ url, i }))
+    .filter(({ i }) => form.selectedImageIndexes[i]);
+  for (const { url, i } of selectedExternalUrls) {
+    if (slotData.length >= SLOT_COUNT) break;
+    slotData.push({ type: "url", url, urlIndex: i });
+  }
+  while (slotData.length < SLOT_COUNT) {
+    slotData.push({ type: "empty" });
+  }
+
+  // Cover determination (backend rule)
+  const firstReadyUploadSlotIdx = slotData.findIndex(
+    (s) => s.type === "upload" && uploadTickets[(s as { type: "upload"; uploadId: string }).uploadId]?.state === "ready"
+  );
+  const coverSlotIdx =
+    firstReadyUploadSlotIdx >= 0
+      ? firstReadyUploadSlotIdx
+      : slotData[0].type !== "empty"
+      ? 0
+      : -1;
+
+  const usedCount = slotData.filter((s) => s.type !== "empty").length;
   const pricingPreview = computePricingPreview(form.cost, form.markupPercent, form.quantity);
 
   // ── Render ────────────────────────────────────────────────────────────────
 
   return (
     <div style={s.container}>
+      {/* Hidden file inputs */}
+      <input
+        ref={imageFileInputRef}
+        type="file"
+        accept=".jpg,.jpeg,.png,.webp,.gif"
+        style={{ display: "none" }}
+        onChange={handleFileInputChange}
+      />
+      <input
+        ref={attachmentFileInputRef}
+        type="file"
+        accept=".jpg,.jpeg,.png,.webp,.gif,.pdf"
+        style={{ display: "none" }}
+        onChange={handleFileInputChange}
+      />
+
       {/* Draft conflict dialog */}
       {conflictPending && (
         <div style={s.conflictOverlay}>
@@ -1187,35 +1926,104 @@ export default function ProductForm({
         </div>
       )}
 
+      {/* Interruption recovery banner */}
+      {recoveryTickets.length > 0 && (
+        <div style={s.recoveryBanner}>
+          <strong>{recoveryTickets.length} upload(s) need finish retry</strong> (bytes uploaded but not confirmed):
+          {recoveryTickets.map((t) => (
+            <div key={t.uploadId} style={{ marginTop: 4, display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.name}</span>
+              <button
+                style={{ fontSize: 11, padding: "2px 8px", background: "#B8962E", color: "#fff", border: "none", borderRadius: 4, cursor: "pointer" }}
+                type="button"
+                onClick={() => handleRetryFinish(t)}
+              >
+                Retry
+              </button>
+              <button
+                style={{ fontSize: 11, padding: "2px 6px", background: "none", color: "#888", border: "1px solid #ccc", borderRadius: 4, cursor: "pointer" }}
+                type="button"
+                onClick={() => setRecoveryTickets((prev) => prev.filter((r) => r.uploadId !== t.uploadId))}
+              >
+                Dismiss
+              </button>
+            </div>
+          ))}
+          <div style={{ fontSize: 10, color: "#856404", marginTop: 4 }}>
+            Note: if retry fails repeatedly, bytes may be orphaned on the storage server.
+          </div>
+        </div>
+      )}
+
       {/* ── Image grid ───────────────────────────────────────────── */}
       <div style={s.imageSection}>
+        {/* Cover info when mixed sources */}
+        {form.imageUploadIds.length > 0 && selectedUrls.length > 0 && (
+          <div style={{ fontSize: 10, color: "#B8962E", marginBottom: 6 }}>
+            ℹ Uploaded images are cover; external URLs are additional.
+          </div>
+        )}
         <div style={s.imageGrid}>
-          {/* Primary (cover) slot */}
-          <ImageSlot
-            index={0}
-            url={form.imageUrls[0]}
-            isCover
-            isPrimary
-            onRemove={form.imageUrls[0] ? removeImage : undefined}
-            onPickFromPage={pickImage}
-            onAddUrl={addImageUrl}
-            activeTabId={activeTabId}
-          />
-          {/* Secondary slots 1–4 */}
-          {[1, 2, 3, 4].map((slotIdx) => (
-            <ImageSlot
-              key={slotIdx}
-              index={slotIdx}
-              url={form.imageUrls[slotIdx]}
-              onRemove={form.imageUrls[slotIdx] ? removeImage : undefined}
-              onPickFromPage={pickImage}
-              onAddUrl={addImageUrl}
-              activeTabId={activeTabId}
-            />
-          ))}
+          {slotData.map((slot, slotIdx) => {
+            const isPrimary = slotIdx === 0;
+            const isCover = slotIdx === coverSlotIdx;
+
+            if (slot.type === "upload") {
+              const ticket = uploadTickets[slot.uploadId];
+              return (
+                <ImageSlot
+                  key={`upload-${slot.uploadId}`}
+                  index={slotIdx}
+                  url={slot.previewUrl}
+                  isCover={isCover}
+                  isPrimary={isPrimary}
+                  uploadTicket={ticket}
+                  uploadProgress={uploadProgress[slot.uploadId]}
+                  uploadError={uploadErrors[slot.uploadId]}
+                  onRemove={ticket?.state !== "attached" ? () => handleRemoveUpload(slot.uploadId) : undefined}
+                  onRetryUpload={
+                    ticket?.state === "uploaded-awaiting-finish" && ticket.storageId
+                      ? () => handleRetryFinish(ticket)
+                      : undefined
+                  }
+                  activeTabId={activeTabId}
+                />
+              );
+            }
+
+            if (slot.type === "url") {
+              return (
+                <ImageSlot
+                  key={`url-${slot.urlIndex}`}
+                  index={slotIdx}
+                  url={slot.url}
+                  isCover={isCover}
+                  isPrimary={isPrimary}
+                  onRemove={() => removeImage(slot.urlIndex)}
+                  onPickFromPage={pickImage}
+                  onAddUrl={addImageUrl}
+                  onUploadFile={triggerImageUpload}
+                  activeTabId={activeTabId}
+                />
+              );
+            }
+
+            // Empty slot
+            return (
+              <ImageSlot
+                key={`empty-${slotIdx}`}
+                index={slotIdx}
+                isPrimary={isPrimary}
+                onPickFromPage={pickImage}
+                onAddUrl={addImageUrl}
+                onUploadFile={triggerImageUpload}
+                activeTabId={activeTabId}
+              />
+            );
+          })}
         </div>
         <div style={s.imageCountBadge}>
-          {usedCount}/{SLOT_COUNT} images selected
+          {usedCount}/{SLOT_COUNT} images
           {errors.imageUrls && (
             <span style={{ color: "#c0392b", marginLeft: 6 }}>{errors.imageUrls}</span>
           )}
@@ -1239,6 +2047,10 @@ export default function ProductForm({
             Pick
           </button>
         </div>
+        {/* Validation errors from file selection */}
+        {uploadErrors["limit-img"] && (
+          <div style={{ ...s.errorText, marginTop: 4 }}>{uploadErrors["limit-img"]}</div>
+        )}
       </div>
 
       {/* ── Title & source URL ────────────────────────────────────── */}
@@ -1393,7 +2205,7 @@ export default function ProductForm({
             </label>
           </Field>
         </div>
-        {/* Selling price preview — compact 1-line */}
+        {/* Selling price preview */}
         <div style={s.pricingPreviewRow}>
           {pricingPreview.hasPrice && pricingPreview.unitSellingPrice !== null ? (
             <span>
@@ -1460,13 +2272,89 @@ export default function ProductForm({
           type="button"
           aria-expanded={showAttachments}
         >
-          <span>Attachments</span>
+          <span>
+            Attachments
+            {form.attachmentIds.length > 0 && (
+              <span style={{
+                marginLeft: 6,
+                background: "#e0e0e0",
+                color: "#555",
+                fontSize: 10,
+                fontWeight: 700,
+                padding: "1px 5px",
+                borderRadius: 8,
+              }}>
+                {form.attachmentIds.length}
+              </span>
+            )}
+          </span>
           <span style={{ fontSize: 12, color: "#aaa" }}>{showAttachments ? "▲" : "▼"}</span>
         </button>
         {showAttachments && (
           <div style={s.accordionContent}>
-            <div style={{ fontSize: 12, color: "#aaa", padding: "4px 0" }}>
-              File uploads coming in a future release.
+            {form.attachmentIds.length === 0 ? (
+              <div style={{ fontSize: 12, color: "#aaa", padding: "4px 0" }}>
+                No attachments yet.
+              </div>
+            ) : (
+              form.attachmentIds.map((uid) => {
+                const ticket = uploadTickets[uid];
+                if (!ticket) return null;
+                const isInProgress =
+                  ticket.state === "beginning" ||
+                  ticket.state === "uploading" ||
+                  ticket.state === "uploaded-awaiting-finish";
+                const fileSizeKb = ""; // size not stored in ticket
+                return (
+                  <div key={uid} style={s.attachmentRow}>
+                    <span style={s.attachmentName} title={ticket.name}>{ticket.name}</span>
+                    {uploadProgress[uid] !== undefined && ticket.state === "uploading" && (
+                      <span style={s.attachmentSize}>{uploadProgress[uid]}%</span>
+                    )}
+                    <span style={stateBadgeStyle(ticket.state)}>
+                      {stateLabel(ticket.state, uploadProgress[uid])}
+                    </span>
+                    {!isInProgress && ticket.state !== "attached" && (
+                      <button
+                        style={s.attachmentRemoveBtn}
+                        type="button"
+                        onClick={() => handleRemoveUpload(uid)}
+                        title="Remove"
+                        aria-label={`Remove attachment ${ticket.name}`}
+                      >
+                        ×
+                      </button>
+                    )}
+                    {uploadErrors[uid] && (
+                      <span style={{ fontSize: 9, color: "#c0392b", maxWidth: 80, textOverflow: "ellipsis", overflow: "hidden", whiteSpace: "nowrap" }} title={uploadErrors[uid]}>
+                        Error
+                      </span>
+                    )}
+                  </div>
+                );
+              })
+            )}
+
+            {form.attachmentIds.length < MAX_ATTACHMENTS && (
+              <button
+                style={s.uploadFileBtn}
+                type="button"
+                onClick={triggerAttachmentUpload}
+              >
+                + Upload file ({form.attachmentIds.length}/{MAX_ATTACHMENTS})
+              </button>
+            )}
+            {form.attachmentIds.length >= MAX_ATTACHMENTS && (
+              <div style={{ fontSize: 11, color: "#aaa", marginTop: 6 }}>
+                Maximum 10 attachments reached.
+              </div>
+            )}
+            {uploadErrors["limit-att"] && (
+              <div style={{ ...s.errorText, marginTop: 4 }}>{uploadErrors["limit-att"]}</div>
+            )}
+
+            <div style={{ fontSize: 10, color: "#aaa", marginTop: 6 }}>
+              Supported: JPEG, PNG, WebP, GIF, PDF. Max 10 MB per file.
             </div>
           </div>
         )}
@@ -1530,6 +2418,11 @@ export default function ProductForm({
         {hasErrors && !isSaving && (
           <div style={{ fontSize: 11, color: "#c0392b", textAlign: "center", marginBottom: 6 }}>
             Fix the errors above before saving
+          </div>
+        )}
+        {hasInProgressUploads && !isSaving && (
+          <div style={{ fontSize: 11, color: "#856404", textAlign: "center", marginBottom: 6 }}>
+            Waiting for uploads to finish…
           </div>
         )}
 

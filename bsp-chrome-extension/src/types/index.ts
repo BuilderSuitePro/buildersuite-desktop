@@ -66,6 +66,33 @@ export interface ExtractionResult {
   priceCandidates?: PriceCandidate[];
 }
 
+// ─── Upload Tickets ────────────────────────────────────────────────────────────
+
+export type UploadState =
+  | "local"
+  | "beginning"
+  | "uploading"
+  | "uploaded-awaiting-finish"
+  | "ready"
+  | "attached"
+  | "cleanup-needed";
+
+export type UploadKind = "image" | "attachment";
+
+export interface UploadTicket {
+  uploadId: string;
+  uploadUrl: string;
+  storageId: string | null;
+  /** Standard base64 (RFC 4648) SHA-256 of the file bytes, always 44 chars ending in '=' */
+  sha256: string;
+  name: string;
+  kind: UploadKind;
+  state: UploadState;
+  createdAt: number;
+}
+
+export type UploadTicketsRecord = Record<string, UploadTicket>;
+
 // ─── Product Form / Draft ─────────────────────────────────────────────────────
 
 export interface ProductFormState {
@@ -90,6 +117,10 @@ export interface ProductFormState {
   tags: string;
   imageUrls: string[];
   selectedImageIndexes: boolean[];
+  /** Ordered IDs of image upload tickets (uploaded images in slot order) */
+  imageUploadIds: string[];
+  /** Ordered IDs of attachment upload tickets */
+  attachmentIds: string[];
 }
 
 export interface DraftRecord {
@@ -202,7 +233,10 @@ export type MessageType =
   | "PANEL_READY"
   | "ENABLE_ALL_SITES"
   | "DISABLE_ALL_SITES"
-  | "GET_ALL_SITES_STATE";
+  | "GET_ALL_SITES_STATE"
+  | "BEGIN_UPLOAD"
+  | "FINISH_UPLOAD"
+  | "DISCARD_UPLOAD";
 
 export interface BaseMessage {
   type: MessageType;
@@ -292,6 +326,24 @@ export interface GetAllSitesStateMessage extends BaseMessage {
   type: "GET_ALL_SITES_STATE";
 }
 
+export interface BeginUploadMessage extends BaseMessage {
+  type: "BEGIN_UPLOAD";
+  kind: UploadKind;
+  name: string;
+  sha256: string;
+}
+
+export interface FinishUploadMessage extends BaseMessage {
+  type: "FINISH_UPLOAD";
+  uploadId: string;
+  storageId: string;
+}
+
+export interface DiscardUploadMessage extends BaseMessage {
+  type: "DISCARD_UPLOAD";
+  uploadId: string;
+}
+
 export type ExtensionMessage =
   | LoadSettingsMessage
   | SaveSettingsMessage
@@ -311,7 +363,10 @@ export type ExtensionMessage =
   | PanelReadyMessage
   | EnableAllSitesMessage
   | DisableAllSitesMessage
-  | GetAllSitesStateMessage;
+  | GetAllSitesStateMessage
+  | BeginUploadMessage
+  | FinishUploadMessage
+  | DiscardUploadMessage;
 
 // ─── Content Script Messages ──────────────────────────────────────────────────
 

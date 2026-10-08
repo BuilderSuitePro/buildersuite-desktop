@@ -9,6 +9,7 @@ import type {
   VerifyApiResponse,
   ProductSavePayload,
   SaveApiResponse,
+  UploadKind,
 } from "../types/index.js";
 
 export class ApiError extends Error {
@@ -202,4 +203,254 @@ export async function saveProduct(
   }
 
   return parseSaveResponse(body);
+}
+
+// ─── Upload: Begin ────────────────────────────────────────────────────────────
+
+export interface BeginUploadApiPayload {
+  operation: "begin";
+  kind: UploadKind;
+  name: string;
+  sha256: string;
+}
+
+export interface BeginUploadApiResponse {
+  success: true;
+  protocolVersion: 2;
+  uploadId: string;
+  uploadUrl: string;
+}
+
+export function parseBeginUploadResponse(data: unknown): BeginUploadApiResponse {
+  if (typeof data !== "object" || data === null) {
+    throw new ApiError("Invalid response: expected JSON object");
+  }
+  const obj = data as Record<string, unknown>;
+
+  if (obj["success"] !== true) {
+    throw new ApiError(
+      typeof obj["error"] === "string"
+        ? obj["error"]
+        : "Begin upload failed: server returned success=false"
+    );
+  }
+  if (typeof obj["uploadId"] !== "string" || !obj["uploadId"]) {
+    throw new ApiError("Invalid response: missing uploadId");
+  }
+  if (typeof obj["uploadUrl"] !== "string" || !obj["uploadUrl"]) {
+    throw new ApiError("Invalid response: missing uploadUrl");
+  }
+
+  return {
+    success: true,
+    protocolVersion: 2,
+    uploadId: obj["uploadId"] as string,
+    uploadUrl: obj["uploadUrl"] as string,
+  };
+}
+
+export async function beginUpload(
+  settings: BspSettings,
+  payload: BeginUploadApiPayload
+): Promise<BeginUploadApiResponse> {
+  let response: Response;
+  try {
+    response = await fetch(settings.productUrl, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${settings.connectionKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+      credentials: "omit",
+      redirect: "error",
+    });
+  } catch (err) {
+    const message =
+      err instanceof TypeError ? err.message : "Network request failed";
+    throw new ApiError(`Network error: ${message}`);
+  }
+
+  if (!response.ok) {
+    let errorMsg = `Server returned ${response.status}`;
+    try {
+      const errBody = (await response.json()) as Record<string, unknown>;
+      if (typeof errBody["error"] === "string") errorMsg = errBody["error"];
+      else if (typeof errBody["message"] === "string") errorMsg = errBody["message"];
+    } catch {
+      // ignore parse failure
+    }
+    throw new ApiError(errorMsg, response.status);
+  }
+
+  let body: unknown;
+  try {
+    body = await response.json();
+  } catch {
+    throw new ApiError("Invalid response: could not parse JSON");
+  }
+
+  return parseBeginUploadResponse(body);
+}
+
+// ─── Upload: Finish ───────────────────────────────────────────────────────────
+
+export interface FinishUploadApiPayload {
+  operation: "finish";
+  uploadId: string;
+  storageId: string;
+}
+
+export interface FinishUploadApiResponse {
+  success: true;
+  protocolVersion: 2;
+  uploadId: string;
+}
+
+export function parseFinishUploadResponse(data: unknown): FinishUploadApiResponse {
+  if (typeof data !== "object" || data === null) {
+    throw new ApiError("Invalid response: expected JSON object");
+  }
+  const obj = data as Record<string, unknown>;
+
+  if (obj["success"] !== true) {
+    throw new ApiError(
+      typeof obj["error"] === "string"
+        ? obj["error"]
+        : "Finish upload failed: server returned success=false"
+    );
+  }
+  if (typeof obj["uploadId"] !== "string" || !obj["uploadId"]) {
+    throw new ApiError("Invalid response: missing uploadId");
+  }
+
+  return {
+    success: true,
+    protocolVersion: 2,
+    uploadId: obj["uploadId"] as string,
+  };
+}
+
+export async function finishUpload(
+  settings: BspSettings,
+  payload: FinishUploadApiPayload
+): Promise<FinishUploadApiResponse> {
+  let response: Response;
+  try {
+    response = await fetch(settings.productUrl, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${settings.connectionKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+      credentials: "omit",
+      redirect: "error",
+    });
+  } catch (err) {
+    const message =
+      err instanceof TypeError ? err.message : "Network request failed";
+    throw new ApiError(`Network error: ${message}`);
+  }
+
+  if (!response.ok) {
+    let errorMsg = `Server returned ${response.status}`;
+    try {
+      const errBody = (await response.json()) as Record<string, unknown>;
+      if (typeof errBody["error"] === "string") errorMsg = errBody["error"];
+      else if (typeof errBody["message"] === "string") errorMsg = errBody["message"];
+    } catch {
+      // ignore parse failure
+    }
+    throw new ApiError(errorMsg, response.status);
+  }
+
+  let body: unknown;
+  try {
+    body = await response.json();
+  } catch {
+    throw new ApiError("Invalid response: could not parse JSON");
+  }
+
+  return parseFinishUploadResponse(body);
+}
+
+// ─── Upload: Discard ──────────────────────────────────────────────────────────
+
+export interface DiscardUploadApiPayload {
+  operation: "discard";
+  uploadId: string;
+}
+
+export interface DiscardUploadApiResponse {
+  success: true;
+  /**
+   * discarded: false is NOT proof of deletion — it can mean missing, foreign, or already
+   * attached. Show truthful state; never claim cleanup succeeded when result is ambiguous.
+   */
+  discarded: boolean;
+}
+
+export function parseDiscardUploadResponse(data: unknown): DiscardUploadApiResponse {
+  if (typeof data !== "object" || data === null) {
+    throw new ApiError("Invalid response: expected JSON object");
+  }
+  const obj = data as Record<string, unknown>;
+
+  if (obj["success"] !== true) {
+    throw new ApiError(
+      typeof obj["error"] === "string"
+        ? obj["error"]
+        : "Discard upload failed: server returned success=false"
+    );
+  }
+
+  return {
+    success: true,
+    discarded: obj["discarded"] === true,
+  };
+}
+
+export async function discardUpload(
+  settings: BspSettings,
+  payload: DiscardUploadApiPayload
+): Promise<DiscardUploadApiResponse> {
+  let response: Response;
+  try {
+    response = await fetch(settings.productUrl, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${settings.connectionKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+      credentials: "omit",
+      redirect: "error",
+    });
+  } catch (err) {
+    const message =
+      err instanceof TypeError ? err.message : "Network request failed";
+    throw new ApiError(`Network error: ${message}`);
+  }
+
+  if (!response.ok) {
+    let errorMsg = `Server returned ${response.status}`;
+    try {
+      const errBody = (await response.json()) as Record<string, unknown>;
+      if (typeof errBody["error"] === "string") errorMsg = errBody["error"];
+      else if (typeof errBody["message"] === "string") errorMsg = errBody["message"];
+    } catch {
+      // ignore parse failure
+    }
+    throw new ApiError(errorMsg, response.status);
+  }
+
+  let body: unknown;
+  try {
+    body = await response.json();
+  } catch {
+    throw new ApiError("Invalid response: could not parse JSON");
+  }
+
+  return parseDiscardUploadResponse(body);
 }

@@ -35,6 +35,8 @@ function makeForm(overrides: Partial<ProductFormState> = {}): ProductFormState {
     tags: "",
     imageUrls: [],
     selectedImageIndexes: [],
+    imageUploadIds: [],
+    attachmentIds: [],
     ...overrides,
   };
 }
