@@ -10,6 +10,10 @@ import type {
   ProductSavePayload,
   SaveApiResponse,
   UploadKind,
+  BspProject,
+  BspBoard,
+  BspSelection,
+  DiscoveryPage,
 } from "../types/index.js";
 
 export class ApiError extends Error {
@@ -453,4 +457,168 @@ export async function discardUpload(
   }
 
   return parseDiscardUploadResponse(body);
+}
+
+// ─── Discovery ────────────────────────────────────────────────────────────────
+
+function parseDiscoveryPage<T>(data: unknown, itemValidator: (item: unknown) => T): DiscoveryPage<T> {
+  if (typeof data !== "object" || data === null) {
+    throw new ApiError("Invalid discovery response: expected JSON object");
+  }
+  const obj = data as Record<string, unknown>;
+
+  if (obj["success"] !== true) {
+    throw new ApiError(
+      typeof obj["error"] === "string"
+        ? obj["error"]
+        : "Discovery failed: server returned success=false"
+    );
+  }
+  if (typeof obj["protocolVersion"] !== "number") {
+    throw new ApiError("Invalid discovery response: missing protocolVersion");
+  }
+  if (!Array.isArray(obj["page"])) {
+    throw new ApiError("Invalid discovery response: missing page array");
+  }
+  if (typeof obj["isDone"] !== "boolean") {
+    throw new ApiError("Invalid discovery response: missing isDone");
+  }
+  if (typeof obj["continueCursor"] !== "string") {
+    throw new ApiError("Invalid discovery response: missing continueCursor");
+  }
+
+  const page = (obj["page"] as unknown[]).map(itemValidator);
+  return {
+    success: true,
+    protocolVersion: obj["protocolVersion"] as number,
+    page,
+    isDone: obj["isDone"] as boolean,
+    continueCursor: obj["continueCursor"] as string,
+  };
+}
+
+function validateProject(item: unknown): BspProject {
+  if (typeof item !== "object" || item === null) {
+    throw new ApiError("Invalid project item in discovery response");
+  }
+  const obj = item as Record<string, unknown>;
+  if (typeof obj["_id"] !== "string" || !obj["_id"]) {
+    throw new ApiError("Project item missing _id");
+  }
+  if (typeof obj["name"] !== "string") {
+    throw new ApiError("Project item missing name");
+  }
+  return { _id: obj["_id"] as string, name: obj["name"] as string };
+}
+
+function validateBoard(item: unknown): BspBoard {
+  if (typeof item !== "object" || item === null) {
+    throw new ApiError("Invalid board item in discovery response");
+  }
+  const obj = item as Record<string, unknown>;
+  if (typeof obj["_id"] !== "string" || !obj["_id"]) {
+    throw new ApiError("Board item missing _id");
+  }
+  if (typeof obj["name"] !== "string") {
+    throw new ApiError("Board item missing name");
+  }
+  return { _id: obj["_id"] as string, name: obj["name"] as string };
+}
+
+function validateSelection(item: unknown): BspSelection {
+  if (typeof item !== "object" || item === null) {
+    throw new ApiError("Invalid selection item in discovery response");
+  }
+  const obj = item as Record<string, unknown>;
+  if (typeof obj["_id"] !== "string" || !obj["_id"]) {
+    throw new ApiError("Selection item missing _id");
+  }
+  if (typeof obj["name"] !== "string") {
+    throw new ApiError("Selection item missing name");
+  }
+  return {
+    _id: obj["_id"] as string,
+    name: obj["name"] as string,
+    canReplace: obj["canReplace"] === true,
+    sharedWithClient: obj["sharedWithClient"] === true,
+  };
+}
+
+async function postDiscovery(
+  settings: BspSettings,
+  body: Record<string, unknown>
+): Promise<unknown> {
+  let response: Response;
+  try {
+    response = await fetch(settings.productUrl, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${settings.connectionKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+      credentials: "omit",
+      redirect: "error",
+    });
+  } catch (err) {
+    const message = err instanceof TypeError ? err.message : "Network request failed";
+    throw new ApiError(`Network error: ${message}`);
+  }
+
+  if (!response.ok) {
+    let errorMsg = `Server returned ${response.status}`;
+    try {
+      const errBody = (await response.json()) as Record<string, unknown>;
+      if (typeof errBody["error"] === "string") errorMsg = errBody["error"];
+      else if (typeof errBody["message"] === "string") errorMsg = errBody["message"];
+    } catch {
+      // ignore parse failure
+    }
+    throw new ApiError(errorMsg, response.status);
+  }
+
+  try {
+    return await response.json();
+  } catch {
+    throw new ApiError("Invalid response: could not parse JSON");
+  }
+}
+
+export async function discoverProjects(
+  settings: BspSettings,
+  cursor: string | null
+): Promise<DiscoveryPage<BspProject>> {
+  const body = await postDiscovery(settings, {
+    operation: "projects",
+    paginationOpts: { numItems: 25, cursor },
+  });
+  return parseDiscoveryPage<BspProject>(body, validateProject);
+}
+
+export async function discoverBoards(
+  settings: BspSettings,
+  projectId: string,
+  cursor: string | null
+): Promise<DiscoveryPage<BspBoard>> {
+  const body = await postDiscovery(settings, {
+    operation: "boards",
+    projectId,
+    paginationOpts: { numItems: 25, cursor },
+  });
+  return parseDiscoveryPage<BspBoard>(body, validateBoard);
+}
+
+export async function discoverSelections(
+  settings: BspSettings,
+  projectId: string,
+  boardId: string,
+  cursor: string | null
+): Promise<DiscoveryPage<BspSelection>> {
+  const body = await postDiscovery(settings, {
+    operation: "selections",
+    projectId,
+    boardId,
+    paginationOpts: { numItems: 25, cursor },
+  });
+  return parseDiscoveryPage<BspSelection>(body, validateSelection);
 }

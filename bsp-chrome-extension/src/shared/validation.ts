@@ -3,7 +3,7 @@
  * Contains NO storage access or chrome API calls; pure functions only.
  */
 
-import type { BspSettings, ValidationResult, ProductFormState } from "../types/index.js";
+import type { BspSettings, ValidationResult, ProductFormState, ProductSavePayload, SaveDestination } from "../types/index.js";
 
 const EMBEDDED_CREDENTIALS_RE = /\/\/[^/@]+:[^/@]+@/;
 
@@ -294,15 +294,52 @@ export function computePricingPreview(
   return { unitSellingPrice, total, hasPrice: true };
 }
 
-// ─── Save Payload Builder ─────────────────────────────────────────────────────
+// ─── Save Destination Builder ─────────────────────────────────────────────────
 
-import type { ProductSavePayload } from "../types/index.js";
+export interface DestinationFormState {
+  mode: "library" | "board";
+  projectId?: string;
+  boardId?: string;
+  selectionMode?: "new" | "fill";
+  replaceSelectionId?: string;
+}
+
+/**
+ * Build the save destination from destination form state.
+ * Returns undefined for library-only (no destination field).
+ * Never returns null, {}, or a project-only destination.
+ * If mode is "board" but projectId or boardId is missing, returns undefined (invalid state).
+ */
+export function buildDestination(
+  dest: DestinationFormState
+): SaveDestination | undefined {
+  if (dest.mode === "library") return undefined;
+  if (!dest.projectId || !dest.boardId) return undefined;
+
+  const result: SaveDestination = {
+    projectId: dest.projectId,
+    boardId: dest.boardId,
+  };
+
+  if (
+    dest.selectionMode === "fill" &&
+    dest.replaceSelectionId &&
+    dest.replaceSelectionId.trim()
+  ) {
+    result.replaceSelectionId = dest.replaceSelectionId;
+  }
+
+  return result;
+}
+
+// ─── Save Payload Builder ─────────────────────────────────────────────────────
 
 /** Build the save payload from form state. Omits blank optional fields. */
 export function buildSavePayload(
   form: ProductFormState,
   requestId: string,
-  uploadIds: string[] = []
+  uploadIds: string[] = [],
+  destination?: SaveDestination
 ): ProductSavePayload {
   const selectedImageUrls = form.imageUrls
     .filter((_, i) => form.selectedImageIndexes[i])
@@ -372,5 +409,6 @@ export function buildSavePayload(
     requestId,
     product,
     uploadIds: uploadIds.slice(0, 15),
+    ...(destination ? { destination } : {}),
   };
 }

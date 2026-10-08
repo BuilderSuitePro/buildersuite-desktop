@@ -1,3 +1,43 @@
+// ─── Discovery ────────────────────────────────────────────────────────────────
+
+export interface BspProject {
+  _id: string;
+  name: string;
+}
+
+export interface BspBoard {
+  _id: string;
+  name: string;
+}
+
+export interface BspSelection {
+  _id: string;
+  name: string;
+  canReplace: boolean;
+  sharedWithClient: boolean;
+}
+
+export interface DiscoveryPage<T> {
+  success: boolean;
+  protocolVersion: number;
+  page: T[];
+  isDone: boolean;
+  continueCursor: string;
+}
+
+// ─── Save Destination ─────────────────────────────────────────────────────────
+
+/**
+ * Destination for a board save. Both projectId and boardId are required.
+ * replaceSelectionId is set only when filling an existing placeholder.
+ * Never send null, empty object, or project-only destination.
+ */
+export interface SaveDestination {
+  projectId: string;
+  boardId: string;
+  replaceSelectionId?: string;
+}
+
 // ─── Settings ────────────────────────────────────────────────────────────────
 
 export interface BspSettings {
@@ -157,12 +197,16 @@ export interface ProductSavePayload {
     imageUrls: string[];
   };
   uploadIds: string[];
+  /** Board save destination. Omit entirely for library-only saves. Never send null or empty. */
+  destination?: SaveDestination;
 }
 
 export interface PendingSave {
   requestId: string;
   product: ProductSavePayload["product"];
   uploadIds: string[];
+  /** Preserved for safe retry of board saves. */
+  destination?: SaveDestination;
   timestamp: number;
 }
 
@@ -236,7 +280,10 @@ export type MessageType =
   | "GET_ALL_SITES_STATE"
   | "BEGIN_UPLOAD"
   | "FINISH_UPLOAD"
-  | "DISCARD_UPLOAD";
+  | "DISCARD_UPLOAD"
+  | "DISCOVER_PROJECTS"
+  | "DISCOVER_BOARDS"
+  | "DISCOVER_SELECTIONS";
 
 export interface BaseMessage {
   type: MessageType;
@@ -344,6 +391,24 @@ export interface DiscardUploadMessage extends BaseMessage {
   uploadId: string;
 }
 
+export interface DiscoverProjectsMessage extends BaseMessage {
+  type: "DISCOVER_PROJECTS";
+  cursor: string | null;
+}
+
+export interface DiscoverBoardsMessage extends BaseMessage {
+  type: "DISCOVER_BOARDS";
+  projectId: string;
+  cursor: string | null;
+}
+
+export interface DiscoverSelectionsMessage extends BaseMessage {
+  type: "DISCOVER_SELECTIONS";
+  projectId: string;
+  boardId: string;
+  cursor: string | null;
+}
+
 export type ExtensionMessage =
   | LoadSettingsMessage
   | SaveSettingsMessage
@@ -366,7 +431,10 @@ export type ExtensionMessage =
   | GetAllSitesStateMessage
   | BeginUploadMessage
   | FinishUploadMessage
-  | DiscardUploadMessage;
+  | DiscardUploadMessage
+  | DiscoverProjectsMessage
+  | DiscoverBoardsMessage
+  | DiscoverSelectionsMessage;
 
 // ─── Content Script Messages ──────────────────────────────────────────────────
 
