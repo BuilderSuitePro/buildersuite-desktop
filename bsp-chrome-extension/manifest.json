@@ -1,0 +1,38 @@
+{
+  "manifest_version": 3,
+  "name": "Builder Suite Pro",
+  "version": "1.0.0",
+  "description": "Product picker for Builder Suite Pro – capture products from any page.",
+  "minimum_chrome_version": "116",
+
+  "permissions": ["sidePanel", "storage", "activeTab", "scripting"],
+
+  "optional_host_permissions": ["https://*/*"],
+
+  "side_panel": {
+    "default_path": "src/sidepanel/index.html"
+  },
+
+  "background": {
+    "service_worker": "src/service-worker/index.ts",
+    "type": "module"
+  },
+
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["src/content/extract.ts"],
+      "run_at": "document_idle"
+    }
+  ],
+
+  "action": {
+    "default_title": "Builder Suite Pro"
+  },
+
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}
