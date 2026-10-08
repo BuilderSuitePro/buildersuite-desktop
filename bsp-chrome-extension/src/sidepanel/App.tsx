@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import SettingsPanel from "./components/SettingsPanel.js";
+import ProductForm from "./components/ProductForm.js";
 import type { BspSettings, VerificationState } from "../types/index.js";
 import type { MessageResponse } from "../types/index.js";
 
@@ -40,17 +41,32 @@ const styles: Record<string, React.CSSProperties> = {
     overflowY: "auto",
     padding: "16px",
   },
-  stage2Placeholder: {
-    marginTop: 24,
-    padding: "12px 14px",
-    background: "#f8f8f8",
-    borderRadius: 6,
-    border: "1px dashed #ccc",
-    color: "#888",
-    fontSize: 12,
+  tabBar: {
+    display: "flex",
+    borderBottom: "2px solid #eee",
+    marginBottom: 12,
+    gap: 0,
+  },
+  tab: {
+    flex: 1,
+    padding: "7px 0",
     textAlign: "center",
+    fontSize: 12,
+    fontWeight: 600,
+    cursor: "pointer",
+    border: "none",
+    background: "none",
+    color: "#888",
+    borderBottom: "2px solid transparent",
+    marginBottom: -2,
+  },
+  tabActive: {
+    color: "#B8962E",
+    borderBottom: "2px solid #B8962E",
   },
 };
+
+type Tab = "capture" | "settings";
 
 interface LoadedState {
   settings: BspSettings | null;
@@ -60,6 +76,10 @@ interface LoadedState {
 export default function App() {
   const [loaded, setLoaded] = useState<LoadedState | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<Tab>("capture");
+  const [activeTabId, setActiveTabId] = useState<number | null>(null);
+  const [activeTabUrl, setActiveTabUrl] = useState<string>("");
+  const [verification, setVerification] = useState<VerificationState | null>(null);
 
   useEffect(() => {
     chrome.runtime.sendMessage(
@@ -74,9 +94,20 @@ export default function App() {
           return;
         }
         setLoaded(response.data);
+        setVerification(response.data.verification);
       }
     );
+
+    // Get the active tab info
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      const tab = tabs[0];
+      if (tab?.id) setActiveTabId(tab.id);
+      if (tab?.url) setActiveTabUrl(tab.url);
+    });
   }, []);
+
+  const isConnected = verification?.status === "verified";
+  const bspOrigin = loaded?.settings?.bspOrigin ?? "";
 
   return (
     <div style={styles.app}>
@@ -95,15 +126,46 @@ export default function App() {
         )}
 
         {loaded !== null && (
-          <SettingsPanel
-            initialSettings={loaded.settings}
-            initialVerification={loaded.verification}
-          />
-        )}
+          <>
+            {/* Tab bar */}
+            <div style={styles.tabBar}>
+              <button
+                style={{
+                  ...styles.tab,
+                  ...(activeTab === "capture" ? styles.tabActive : {}),
+                }}
+                onClick={() => setActiveTab("capture")}
+              >
+                Capture
+              </button>
+              <button
+                style={{
+                  ...styles.tab,
+                  ...(activeTab === "settings" ? styles.tabActive : {}),
+                }}
+                onClick={() => setActiveTab("settings")}
+              >
+                Settings
+              </button>
+            </div>
 
-        <div style={styles.stage2Placeholder}>
-          Stage 2: Product capture form will appear here
-        </div>
+            {activeTab === "settings" && (
+              <SettingsPanel
+                initialSettings={loaded.settings}
+                initialVerification={loaded.verification}
+              />
+            )}
+
+            {activeTab === "capture" && (
+              <ProductForm
+                activeTabId={activeTabId}
+                activeTabUrl={activeTabUrl}
+                bspOrigin={bspOrigin}
+                isConnected={isConnected}
+              />
+            )}
+          </>
+        )}
       </div>
     </div>
   );

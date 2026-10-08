@@ -5,10 +5,17 @@
  * URL parameters, console logs, or content-script-accessible paths.
  */
 
-import type { BspSettings, VerificationState } from "../types/index.js";
+import type {
+  BspSettings,
+  VerificationState,
+  DraftRecord,
+  PendingSave,
+} from "../types/index.js";
 
 const SETTINGS_KEY = "bsp_settings";
 const VERIFICATION_KEY = "bsp_verification";
+const DRAFT_KEY = "bsp_draft";
+const PENDING_SAVE_KEY = "bsp_pending_save";
 
 export async function loadSettings(): Promise<BspSettings | null> {
   const result = await chrome.storage.local.get(SETTINGS_KEY);
@@ -34,4 +41,36 @@ export async function saveVerificationState(
 
 export async function clearVerificationState(): Promise<void> {
   await chrome.storage.local.remove(VERIFICATION_KEY);
+}
+
+// ─── Draft ────────────────────────────────────────────────────────────────────
+
+export async function loadDraft(): Promise<DraftRecord | null> {
+  const result = await chrome.storage.local.get(DRAFT_KEY);
+  const raw = result[DRAFT_KEY] as DraftRecord | undefined;
+  return raw ?? null;
+}
+
+export async function saveDraft(draft: DraftRecord): Promise<void> {
+  await chrome.storage.local.set({ [DRAFT_KEY]: draft });
+}
+
+export async function clearDraft(): Promise<void> {
+  await chrome.storage.local.remove(DRAFT_KEY);
+}
+
+// ─── Pending Save ─────────────────────────────────────────────────────────────
+
+export async function loadPendingSave(): Promise<PendingSave | null> {
+  const result = await chrome.storage.local.get(PENDING_SAVE_KEY);
+  const raw = result[PENDING_SAVE_KEY] as PendingSave | undefined;
+  return raw ?? null;
+}
+
+export async function savePendingSave(pending: PendingSave): Promise<void> {
+  await chrome.storage.local.set({ [PENDING_SAVE_KEY]: pending });
+}
+
+export async function clearPendingSave(): Promise<void> {
+  await chrome.storage.local.remove(PENDING_SAVE_KEY);
 }
