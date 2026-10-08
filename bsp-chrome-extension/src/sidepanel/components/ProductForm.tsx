@@ -15,6 +15,7 @@ import type {
 import {
   validateProductForm,
   buildSavePayload,
+  buildDestination,
   computePricingPreview,
 } from "../../shared/validation.js";
 import {
@@ -22,6 +23,8 @@ import {
   computeSha256Base64,
   buildUploadIds,
 } from "../../shared/upload.js";
+import DestinationSelector from "./DestinationSelector.js";
+import type { DestinationFormState } from "./DestinationSelector.js";
 
 const UPLOAD_TICKETS_KEY = "uploadTickets";
 const MAX_IMAGE_UPLOADS = 5;
@@ -1023,9 +1026,9 @@ function uploadBytesWithProgress(
 type SaveState =
   | { status: "idle" }
   | { status: "saving" }
-  | { status: "success"; materialId: string; path: string; replayed: boolean }
+  | { status: "success"; materialId: string; path: string; replayed: boolean; selectionId?: string; selectionPath?: string }
   | { status: "unknown"; requestId: string; frozenPayload: ProductSavePayload; error: string }
-  | { status: "error"; error: string; keepDraft: boolean };
+  | { status: "error"; error: string; keepDraft: boolean; is404?: boolean; is409?: boolean; is403?: boolean };
 
 type AutoFilledFields = Set<keyof ProductFormState>;
 
@@ -1064,6 +1067,9 @@ export default function ProductForm({
   const [draftBanner, setDraftBanner] = useState<string | null>(null);
   const [conflictPending, setConflictPending] = useState<PendingCandidate | null>(null);
   const [urlInput, setUrlInput] = useState("");
+
+  // ── Destination state ───────────────────────────────────────────────────────
+  const [destinationState, setDestinationState] = useState<DestinationFormState>({ mode: "library" });
 
   // ── Upload state ────────────────────────────────────────────────────────────
   const [uploadTickets, setUploadTickets] = useState<UploadTicketsRecord>({});
@@ -1763,8 +1769,10 @@ export default function ProductForm({
 
   async function handleSave() {
     if (hasErrors || saveState.status === "saving" || hasInProgressUploads) return;
+    if (destinationBlocked) return;
     const requestId = crypto.randomUUID();
-    const payload = buildSavePayload(form, requestId, saveUploadIds);
+    const destination = buildDestination(destinationState);
+    const payload = buildSavePayload(form, requestId, saveUploadIds, destination);
     await doSave(payload);
   }
 
@@ -1787,7 +1795,14 @@ export default function ProductForm({
 
     if (response.ok) {
       const data = response.data;
-      setSaveState({ status: "success", materialId: data.materialId, path: data.path, replayed: data.replayed });
+      setSaveState({
+        status: "success",
+        materialId: data.materialId,
+        path: data.path,
+        replayed: data.replayed,
+        selectionId: data.selectionId,
+        selectionPath: data.selectionPath,
+      });
       chrome.runtime.sendMessage({ type: "CLEAR_DRAFT" });
 
       // Mark all included upload tickets as "attached"
@@ -1802,8 +1817,18 @@ export default function ProductForm({
       } else {
         const status400 = errMsg.includes("400");
         const status401 = errMsg.includes("401");
+        const status403 = errMsg.includes("403") || errMsg.includes("Forbidden") || errMsg.includes("forbidden");
+        const status404 = errMsg.includes("404") || errMsg.includes("Not Found") || errMsg.includes("not found");
+        const status409 = errMsg.includes("409") || errMsg.includes("Conflict") || errMsg.includes("conflict");
         const status413 = errMsg.includes("413") || errMsg.includes("too large");
-        setSaveState({ status: "error", error: errMsg, keepDraft: !status400 || status401 || status413 });
+        setSaveState({
+          status: "error",
+          error: errMsg,
+          keepDraft: !status400 || status401 || status413,
+          is404: status404,
+          is409: status409,
+          is403: status403,
+        });
       }
     }
   }
@@ -1811,11 +1836,26 @@ export default function ProductForm({
   // ── Derived ───────────────────────────────────────────────────────────────
 
   const isSaving = saveState.status === "saving";
-  const saveDisabled = hasErrors || isSaving || !isConnected || hasInProgressUploads;
+
+  // Destination-specific blocking: board mode selected but no board chosen
+  const destinationBlocked =
+    destinationState.mode === "board" &&
+    !!destinationState.projectId &&
+    !destinationState.boardId;
+
+  const saveDisabled = hasErrors || isSaving || !isConnected || hasInProgressUploads || destinationBlocked;
 
   const libraryLink =
     saveState.status === "success" && bspOrigin
       ? `${bspOrigin}/library/my-items?tab=materials&materialId=${saveState.materialId}`
+      : null;
+
+  // Board link — only if selectionPath is present and starts with /projects/
+  const boardLink =
+    saveState.status === "success" &&
+    bspOrigin &&
+    saveState.selectionPath?.startsWith("/projects/")
+      ? `${bspOrigin}${saveState.selectionPath}`
       : null;
 
   // Map form images to the 5-slot grid (cover + 4)
@@ -2248,18 +2288,41 @@ export default function ProductForm({
           type="button"
           aria-expanded={showDestination}
         >
-          <span>Destination</span>
+          <span>
+            Destination
+            {destinationState.mode === "board" && destinationState.boardId && (
+              <span style={{
+                marginLeft: 6,
+                background: "#B8962E",
+                color: "#fff",
+                fontSize: 9,
+                fontWeight: 700,
+                padding: "1px 5px",
+                borderRadius: 8,
+              }}>Board</span>
+            )}
+          </span>
           <span style={{ fontSize: 12, color: "#aaa" }}>{showDestination ? "▲" : "▼"}</span>
         </button>
         {showDestination && (
           <div style={s.accordionContent}>
-            <div style={s.destinationRow}>
-              <input type="radio" checked readOnly style={s.checkbox} aria-label="Library only" />
-              <span>Library only</span>
-            </div>
-            <div style={s.destinationNote}>
-              Board &amp; project selection coming in a future release.
-            </div>
+            <DestinationSelector
+              bspOrigin={bspOrigin}
+              onChange={setDestinationState}
+            />
+            {destinationBlocked && (
+              <div style={{
+                fontSize: 11,
+                color: "#856404",
+                background: "#fff8e1",
+                border: "1px solid #f0c040",
+                borderRadius: 4,
+                padding: "5px 9px",
+                marginTop: 6,
+              }}>
+                Select a board to save to it
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -2420,6 +2483,11 @@ export default function ProductForm({
             Fix the errors above before saving
           </div>
         )}
+        {destinationBlocked && !isSaving && (
+          <div style={{ fontSize: 11, color: "#856404", textAlign: "center", marginBottom: 6 }}>
+            Select a board to save to it
+          </div>
+        )}
         {hasInProgressUploads && !isSaving && (
           <div style={{ fontSize: 11, color: "#856404", textAlign: "center", marginBottom: 6 }}>
             Waiting for uploads to finish…
@@ -2432,14 +2500,35 @@ export default function ProductForm({
           disabled={saveDisabled}
           type="button"
         >
-          {isSaving ? "Saving…" : "Save to Library"}
+          {isSaving
+            ? "Saving…"
+            : destinationState.mode === "board" && destinationState.boardId
+            ? "Save to Library & Board"
+            : "Save to Library"}
         </button>
 
         {saveState.status === "success" && (
           <div style={s.successBox}>
-            {saveState.replayed ? <strong>Already saved</strong> : <strong>Saved to library!</strong>}
+            {saveState.replayed ? (
+              <strong>Already saved</strong>
+            ) : (
+              <strong>{boardLink ? "Saved to library & board!" : "Saved to library!"}</strong>
+            )}
             {libraryLink && (
               <>{" "}<a href={libraryLink} target="_blank" rel="noreferrer" style={{ color: "#1a7a45" }}>Open in library</a></>
+            )}
+            {boardLink && (
+              <>{" · "}<a href={boardLink} target="_blank" rel="noreferrer" style={{ color: "#1a7a45" }}>Open board</a></>
+            )}
+            {saveState.selectionId && !boardLink && (
+              <div style={{ fontSize: 10, color: "#555", marginTop: 2 }}>
+                Saved to board selection.
+              </div>
+            )}
+            {destinationState.selectionMode === "new" && saveState.selectionId && (
+              <div style={{ fontSize: 10, color: "#666", marginTop: 2 }}>
+                New selection is private. Share it with your client from the board when ready.
+              </div>
             )}
           </div>
         )}
@@ -2459,7 +2548,25 @@ export default function ProductForm({
         )}
 
         {saveState.status === "error" && (
-          <div style={s.errorBox}>{saveState.error}</div>
+          <div style={s.errorBox}>
+            {saveState.is409 && (
+              <strong>Conflict: </strong>
+            )}
+            {saveState.is403 && (
+              <strong>Permission error: </strong>
+            )}
+            {saveState.error}
+            {saveState.is404 && (
+              <div style={{ marginTop: 4, fontSize: 10 }}>
+                Board, project, or placeholder may no longer exist. Refresh your destination choices.
+              </div>
+            )}
+            {saveState.is403 && (
+              <div style={{ marginTop: 4, fontSize: 10 }}>
+                Verify your connection in Settings, or switch to Library only.
+              </div>
+            )}
+          </div>
         )}
       </div>
     </div>

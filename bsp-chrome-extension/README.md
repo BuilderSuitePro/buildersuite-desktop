@@ -149,6 +149,61 @@ npm test             # run test suite
 
 ---
 
+## Destination: Project → Board → Selection
+
+The **Destination** accordion in the product form lets you route a save to a specific board in your BSP workspace, in addition to the library.
+
+### Library only (default)
+Saves the product to your BSP library only. No destination field is sent in the API payload.
+
+### Add to board
+Enables a three-level selection flow:
+
+1. **Project** — choose from your accessible BSP projects. Pages load 25 at a time; click **Load more** to fetch the next page. Use **↻ Refresh** to re-fetch from page 1.
+2. **Board** — loads automatically after a project is selected. If the project has no boards, a link to create one in BSP is shown.
+3. **Selection** — two sub-options after a board is selected:
+   - **New selection** (default) — creates a private, pending selection on the board. The cover image comes from the first uploaded image (or `imageUrls[0]`). The selling price (cost + markup) appears on the board; internal cost, markup details, vendor description, notes, and attachments remain in the library only. Share the selection with your client from the board when ready.
+   - **Fill placeholder** — replaces an existing placeholder selection (`canReplace: true`). Only eligible selections are shown; ordered/ineligible ones are shown disabled or omitted. Replaces product fields (title, description, supplier, dimensions, images, etc.) while **preserving** deadline, allowance, responsibility, ordering position, status, prior staff notes, sharing state, and client decisions and comments.
+
+### Reset rules
+- Selecting a different **project** clears the board selection and any chosen placeholder.
+- Selecting a different **board** clears any chosen placeholder.
+- Switching back to **Library only** clears project, board, and placeholder selection entirely.
+
+### Warnings
+- **Replacement warning** — always shown before saving over a placeholder: *"Replacing this selection updates product fields only. Deadlines, allowances, status, sharing, and client decisions are preserved."*
+- **Shared selection warning** — shown additionally when the chosen placeholder is already shared with the client: *"This selection is already shared with the client. Saving will update what they see immediately. Their decisions and comments will be preserved."*
+
+### Blocking rules
+- If a project is selected but no board is chosen: save is disabled and a message prompts to select a board. Library-only is still available and unblocked.
+- A board mode destination with only a projectId (no boardId) is never sent to the server.
+
+### 403 / Permission handling
+If the discovery API returns 403:
+1. The extension calls `VERIFY_CONNECTION` to check whether the connection key is still valid.
+2. **Key valid, selections forbidden** → board save is disabled with an explanation; library-only remains fully available.
+3. **Key possibly revoked** → a reconnection prompt is shown; the key is **never automatically erased** based solely on a 403 from discovery.
+
+### Save payload
+- **Library only:** `{ operation, requestId, product, uploadIds }` — no `destination` field
+- **Board (new selection):** adds `"destination": { "projectId": "...", "boardId": "..." }`
+- **Fill placeholder:** adds `"destination": { "projectId": "...", "boardId": "...", "replaceSelectionId": "..." }`
+- **Never sent:** `destination: null`, `destination: {}`, project-only destination, `roomId`, `createBoard`, or `sharedWithClient`
+
+### Success display
+After a successful board save:
+- **Open in library** link → `/library/my-items?tab=materials&materialId={id}` (uses the full path with query params; `/library` alone is not used as its redirect drops parameters)
+- **Open board** link → `{bspOrigin}{selectionPath}` (only shown when `selectionPath` starts with `/projects/` — arbitrary URLs are never opened)
+- `replayed: true` is shown as "Already saved" (success, not a duplicate error)
+
+### Error handling
+- **404** — board, project, or placeholder no longer accessible; refresh destination choices (Save keeps the draft)
+- **409 CONFLICT** — replacement already filled or ordered; server message shown; no silent retry
+- **403 FORBIDDEN** — connection verified before concluding the key is revoked; library-only is never silently substituted without telling the user
+- **Network timeout** — the exact frozen `requestId` + payload is retained; manual retry offered with the same request (no new `requestId`)
+
+---
+
 ## Architecture
 
 - **Service worker** (`src/service-worker/`) — handles all privileged operations: settings storage, API calls to BSP, pending candidate relay, and permission management. The connection key never leaves this context.

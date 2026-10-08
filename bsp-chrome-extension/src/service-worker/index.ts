@@ -14,6 +14,10 @@ import type {
   DraftRecord,
   PendingCandidate,
   UploadTicket,
+  DiscoveryPage,
+  BspProject,
+  BspBoard,
+  BspSelection,
 } from "../types/index.js";
 import {
   loadSettings,
@@ -47,6 +51,9 @@ import {
   beginUpload,
   finishUpload,
   discardUpload,
+  discoverProjects,
+  discoverBoards,
+  discoverSelections,
   ApiError,
 } from "./api.js";
 
@@ -250,6 +257,7 @@ async function handleMessage(
           requestId: payload.requestId,
           product: payload.product,
           uploadIds: payload.uploadIds,
+          destination: payload.destination,
           timestamp: Date.now(),
         });
 
@@ -569,6 +577,71 @@ async function handleMessage(
         } catch (err) {
           const errMsg = err instanceof ApiError ? err.message : "Discard upload failed";
           sendResponse({ ok: false, error: errMsg });
+        }
+        break;
+      }
+
+      // ─── Discovery operations ───────────────────────────────────────────────
+
+      case "DISCOVER_PROJECTS": {
+        const discoverSettings = await loadSettings();
+        if (!discoverSettings) {
+          sendResponse({ ok: false, error: "No settings saved yet" });
+          break;
+        }
+        try {
+          const result: DiscoveryPage<BspProject> = await discoverProjects(
+            discoverSettings,
+            message.cursor
+          );
+          sendResponse({ ok: true, data: result });
+        } catch (err) {
+          const statusCode = err instanceof ApiError ? err.statusCode : undefined;
+          const errMsg = err instanceof ApiError ? err.message : "Discovery failed";
+          sendResponse({ ok: false, error: errMsg, statusCode } as MessageResponse & { statusCode?: number });
+        }
+        break;
+      }
+
+      case "DISCOVER_BOARDS": {
+        const discoverBoardsSettings = await loadSettings();
+        if (!discoverBoardsSettings) {
+          sendResponse({ ok: false, error: "No settings saved yet" });
+          break;
+        }
+        try {
+          const result: DiscoveryPage<BspBoard> = await discoverBoards(
+            discoverBoardsSettings,
+            message.projectId,
+            message.cursor
+          );
+          sendResponse({ ok: true, data: result });
+        } catch (err) {
+          const statusCode = err instanceof ApiError ? err.statusCode : undefined;
+          const errMsg = err instanceof ApiError ? err.message : "Discovery failed";
+          sendResponse({ ok: false, error: errMsg, statusCode } as MessageResponse & { statusCode?: number });
+        }
+        break;
+      }
+
+      case "DISCOVER_SELECTIONS": {
+        const discoverSelectionsSettings = await loadSettings();
+        if (!discoverSelectionsSettings) {
+          sendResponse({ ok: false, error: "No settings saved yet" });
+          break;
+        }
+        try {
+          const result: DiscoveryPage<BspSelection> = await discoverSelections(
+            discoverSelectionsSettings,
+            message.projectId,
+            message.boardId,
+            message.cursor
+          );
+          sendResponse({ ok: true, data: result });
+        } catch (err) {
+          const statusCode = err instanceof ApiError ? err.statusCode : undefined;
+          const errMsg = err instanceof ApiError ? err.message : "Discovery failed";
+          sendResponse({ ok: false, error: errMsg, statusCode } as MessageResponse & { statusCode?: number });
         }
         break;
       }
