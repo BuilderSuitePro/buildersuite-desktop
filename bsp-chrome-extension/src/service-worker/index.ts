@@ -32,6 +32,10 @@ import {
   loadGrantedOrigins,
   addGrantedOrigin,
   removeGrantedOrigin,
+  PENDING_CANDIDATE_KEY,
+  loadAllSitesEnabled,
+  saveAllSitesEnabled,
+  clearAllSitesEnabled,
 } from "./storage.js";
 import { verifyConnection, saveProduct, ApiError } from "./api.js";
 
@@ -65,14 +69,58 @@ chrome.runtime.onMessage.addListener(
   ) => {
     const msg = message as ExtensionMessage;
 
-    // HOVER_IMAGE_CLICKED is allowed from content scripts (not from page scripts)
+    // HOVER_IMAGE_CLICKED is handled SYNCHRONOUSLY here (not in async handleMessage)
+    // so that chrome.sidePanel.open() is called while the user-gesture context is still
+    // active. Any await before sidePanel.open loses the gesture context in Chrome MV3.
     if (msg.type === "HOVER_IMAGE_CLICKED") {
       if (!isContentScriptSender(sender)) {
         sendResponse({ ok: false, error: "Untrusted message sender" });
         return false;
       }
-      handleMessage(msg, sender, sendResponse);
-      return true;
+
+      const tabId = sender.tab?.id;
+      if (!tabId) {
+        sendResponse({ ok: false, error: "No tab context" });
+        return false;
+      }
+
+      // Sanitize candidate data from untrusted page context (synchronous)
+      const rawCandidate = msg.candidate as PendingCandidate;
+      const candidate: PendingCandidate = {
+        imageUrl: String(rawCandidate.imageUrl ?? "").slice(0, 8192),
+        altText: rawCandidate.altText ? String(rawCandidate.altText).slice(0, 500) : undefined,
+        sourceUrl: String(rawCandidate.sourceUrl ?? "").slice(0, 8192),
+        cardLink: rawCandidate.cardLink ? String(rawCandidate.cardLink).slice(0, 8192) : undefined,
+        cardTitle: rawCandidate.cardTitle ? String(rawCandidate.cardTitle).slice(0, 500) : undefined,
+        cardPrice:
+          typeof rawCandidate.cardPrice === "number" &&
+          isFinite(rawCandidate.cardPrice) &&
+          rawCandidate.cardPrice >= 0
+            ? rawCandidate.cardPrice
+            : undefined,
+        timestamp: Date.now(),
+        tabId,
+        isDetailPage: Boolean(rawCandidate.isDetailPage),
+      };
+
+      // STEP 1: Open side panel FIRST — synchronously, before any async work.
+      // Chrome considers this a user-gesture context because it was triggered by
+      // a content-script message from a user click. This call MUST happen before
+      // any await/Promise resolution or Chrome loses the gesture context.
+      chrome.sidePanel.open({ tabId }).catch((err: unknown) => {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        console.error("[BSP] sidePanel.open failed:", errMsg);
+        // Store error so the panel can display an actionable message
+        chrome.storage.local.set({
+          bsp_side_panel_error: { message: errMsg, timestamp: Date.now() },
+        });
+      });
+
+      // STEP 2: Persist candidate (fire-and-forget — panel reads on mount)
+      chrome.storage.local.set({ [PENDING_CANDIDATE_KEY]: candidate });
+
+      sendResponse({ ok: true, data: { tabId } });
+      return false;
     }
 
     if (!isTrustedSender(sender)) {
@@ -244,40 +292,12 @@ async function handleMessage(
         break;
       }
 
+      // HOVER_IMAGE_CLICKED is intercepted and handled synchronously in the onMessage
+      // listener BEFORE handleMessage is called (to preserve the user-gesture context
+      // for sidePanel.open). This case should never execute at runtime, but we keep it
+      // for TypeScript exhaustiveness.
       case "HOVER_IMAGE_CLICKED": {
-        // Validate: sender must be a content script (checked before entering this handler)
-        const tabId = sender.tab?.id;
-        if (!tabId) {
-          sendResponse({ ok: false, error: "No tab context" });
-          break;
-        }
-
-        // Validate candidate data is safe (page-derived, untrusted)
-        const rawCandidate = message.candidate as PendingCandidate;
-        const candidate: PendingCandidate = {
-          imageUrl: String(rawCandidate.imageUrl ?? "").slice(0, 8192),
-          altText: rawCandidate.altText ? String(rawCandidate.altText).slice(0, 500) : undefined,
-          sourceUrl: String(rawCandidate.sourceUrl ?? "").slice(0, 8192),
-          cardLink: rawCandidate.cardLink ? String(rawCandidate.cardLink).slice(0, 8192) : undefined,
-          cardTitle: rawCandidate.cardTitle ? String(rawCandidate.cardTitle).slice(0, 500) : undefined,
-          cardPrice: typeof rawCandidate.cardPrice === "number" && isFinite(rawCandidate.cardPrice) && rawCandidate.cardPrice >= 0
-            ? rawCandidate.cardPrice
-            : undefined,
-          timestamp: Date.now(),
-          tabId,
-          isDetailPage: Boolean(rawCandidate.isDetailPage),
-        };
-
-        await savePendingCandidate(candidate);
-
-        // Try to open side panel — may fail if Chrome requires user gesture
-        try {
-          await chrome.sidePanel.open({ tabId });
-        } catch {
-          // Side panel opening failed — candidate is stored; panel will find it on next open
-        }
-
-        sendResponse({ ok: true, data: { tabId } });
+        sendResponse({ ok: false, error: "Handled in message listener" });
         break;
       }
 
@@ -337,6 +357,20 @@ async function handleMessage(
       }
 
       case "GET_HOVER_SITE_STATE": {
+        // Return true if all-sites is enabled OR if this specific origin was granted
+        const allSites = await loadAllSitesEnabled();
+        if (allSites) {
+          // Verify permission is still actually granted (user may have revoked it externally)
+          const hasPermission = await chrome.permissions.contains({
+            origins: ["http://*/*", "https://*/*"],
+          });
+          if (hasPermission) {
+            sendResponse({ ok: true, data: { isEnabled: true } });
+            break;
+          }
+          // Permission was revoked — clean up the stale flag
+          await clearAllSitesEnabled();
+        }
         const origins = await loadGrantedOrigins();
         const isEnabled = origins.has(message.origin);
         sendResponse({ ok: true, data: { isEnabled } });
@@ -355,6 +389,87 @@ async function handleMessage(
         break;
       }
 
+      case "PANEL_READY": {
+        // Panel just mounted — check if there's a pending candidate it should receive.
+        // This is the secondary delivery mechanism; the panel also reads storage directly on mount.
+        const pendingForPanel = await loadPendingCandidate();
+        sendResponse({ ok: true, data: { candidate: pendingForPanel ?? null } });
+        break;
+      }
+
+      case "ENABLE_ALL_SITES": {
+        await saveAllSitesEnabled(true);
+
+        // Register content script for persistent all-sites injection (survives SW restart)
+        await registerAllSitesContentScript();
+
+        // Enable hover on all currently-open web tabs immediately
+        const allTabs = await chrome.tabs.query({});
+        for (const tab of allTabs) {
+          if (!tab.id || !tab.url) continue;
+          if (!tab.url.startsWith("http://") && !tab.url.startsWith("https://")) continue;
+          chrome.tabs.sendMessage(tab.id, { type: "ENABLE_HOVER" }).catch(() => {
+            // Tab may not have content script yet; dynamic injection for already-open tabs
+            chrome.scripting.executeScript({
+              target: { tabId: tab.id as number, allFrames: false },
+              files: ["src/content/extract.ts"],
+            }).then(() => {
+              chrome.tabs.sendMessage(tab.id as number, { type: "ENABLE_HOVER" }).catch(() => {});
+            }).catch(() => {});
+          });
+        }
+
+        sendResponse({ ok: true, data: null });
+        break;
+      }
+
+      case "DISABLE_ALL_SITES": {
+        await clearAllSitesEnabled();
+
+        // Revoke the all-sites optional host permissions
+        try {
+          await chrome.permissions.remove({ origins: ["http://*/*", "https://*/*"] });
+        } catch {
+          // ignore — permission may already be absent
+        }
+
+        // Unregister the dynamically-registered content script
+        try {
+          await chrome.scripting.unregisterContentScripts({ ids: ["bsp-hover-all-sites"] });
+        } catch {
+          // ignore — may not have been registered
+        }
+
+        // Disable hover on all open tabs
+        const disableTabs = await chrome.tabs.query({});
+        for (const tab of disableTabs) {
+          if (!tab.id) continue;
+          chrome.tabs.sendMessage(tab.id, { type: "DISABLE_HOVER" }).catch(() => {});
+        }
+
+        sendResponse({ ok: true, data: null });
+        break;
+      }
+
+      case "GET_ALL_SITES_STATE": {
+        const enabled = await loadAllSitesEnabled();
+        if (!enabled) {
+          sendResponse({ ok: true, data: { allSitesEnabled: false } });
+          break;
+        }
+        // Verify the permission is still actually granted
+        const stillGranted = await chrome.permissions.contains({
+          origins: ["http://*/*", "https://*/*"],
+        });
+        if (!stillGranted) {
+          await clearAllSitesEnabled();
+          sendResponse({ ok: true, data: { allSitesEnabled: false } });
+          break;
+        }
+        sendResponse({ ok: true, data: { allSitesEnabled: true } });
+        break;
+      }
+
       default: {
         const _exhaustive: never = message;
         void _exhaustive;
@@ -364,6 +479,55 @@ async function handleMessage(
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : "Internal error";
     sendResponse({ ok: false, error: errMsg });
+  }
+}
+
+/** Registers the content script for all HTTP/HTTPS origins (idempotent). */
+async function registerAllSitesContentScript(): Promise<void> {
+  try {
+    await chrome.scripting.registerContentScripts([
+      {
+        id: "bsp-hover-all-sites",
+        matches: ["http://*/*", "https://*/*"],
+        js: ["src/content/extract.ts"],
+        runAt: "document_idle",
+        persistAcrossSessions: true,
+      },
+    ]);
+  } catch (err) {
+    // Chrome throws if a script with the same id is already registered — that's OK
+    const msg = err instanceof Error ? err.message : String(err);
+    if (!msg.includes("Duplicate script ID") && !msg.includes("already registered")) {
+      console.warn("[BSP] registerContentScripts failed:", msg);
+    }
+  }
+}
+
+// ─── Service worker startup ───────────────────────────────────────────────────
+
+// On SW startup, re-register the all-sites content script if the user previously
+// granted the all-sites permission. Service workers restart frequently in MV3.
+chrome.runtime.onInstalled.addListener(() => {
+  restoreAllSitesRegistrationIfGranted();
+});
+
+// Also re-register on any SW startup (onInstalled only fires on install/update)
+(async () => {
+  await restoreAllSitesRegistrationIfGranted();
+})();
+
+async function restoreAllSitesRegistrationIfGranted(): Promise<void> {
+  const enabled = await loadAllSitesEnabled();
+  if (!enabled) return;
+
+  const granted = await chrome.permissions.contains({
+    origins: ["http://*/*", "https://*/*"],
+  });
+  if (granted) {
+    await registerAllSitesContentScript();
+  } else {
+    // Permission was revoked externally — clear the stale flag
+    await clearAllSitesEnabled();
   }
 }
 
@@ -394,17 +558,36 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   // Only bother reading storage if the URL looks like a web page
   if (!tab.url.startsWith("https://") && !tab.url.startsWith("http://")) return;
 
-  loadGrantedOrigins()
-    .then((origins) => {
-      if (origins.has(tabOrigin)) {
+  loadAllSitesEnabled()
+    .then((allSites) => {
+      if (allSites) {
         chrome.tabs.sendMessage(tabId, { type: "ENABLE_HOVER" }).catch(() => {
-          // Content script not yet ready — it will self-activate from storage on init
+          // Content script may not be running yet — dynamic registration will handle it
         });
+        return;
       }
+      return loadGrantedOrigins().then((origins) => {
+        if (origins.has(tabOrigin)) {
+          chrome.tabs.sendMessage(tabId, { type: "ENABLE_HOVER" }).catch(() => {
+            // Content script not yet ready — it will self-activate from storage on init
+          });
+        }
+      });
     })
     .catch(() => {
       // storage read failure — ignore
     });
+});
+
+// When optional host permissions are removed (e.g. via chrome://extensions),
+// clear the allSitesEnabled flag so the panel prompts again.
+chrome.permissions.onRemoved.addListener((permissions) => {
+  const removedOrigins = permissions.origins ?? [];
+  const allSitesPatterns = ["http://*/*", "https://*/*"];
+  const removedAllSites = allSitesPatterns.some((p) => removedOrigins.includes(p));
+  if (removedAllSites) {
+    clearAllSitesEnabled().catch(() => {});
+  }
 });
 
 // When new optional permissions are granted (e.g. via panel → Enable picking),

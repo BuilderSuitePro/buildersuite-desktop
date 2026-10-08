@@ -8,6 +8,8 @@ import type {
   MessageResponse,
 } from "../types/index.js";
 
+const PENDING_CANDIDATE_KEY = "bsp_pending_candidate";
+
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
 const S: Record<string, React.CSSProperties> = {
@@ -94,16 +96,24 @@ const S: Record<string, React.CSSProperties> = {
   settingsView: {
     padding: "16px",
   },
-  sitePickingBanner: {
+  allSitesBanner: {
     background: "#f8f6ef",
     borderBottom: "1px solid #e8d98a",
-    padding: "7px 12px",
+    padding: "8px 12px",
     fontSize: 12,
+    flexShrink: 0,
+  },
+  allSitesBannerRow: {
     display: "flex",
     alignItems: "center",
     justifyContent: "space-between",
     gap: 8,
-    flexShrink: 0,
+  },
+  allSitesBannerExplainer: {
+    color: "#666",
+    fontSize: 11,
+    marginTop: 4,
+    lineHeight: 1.4,
   },
   sitePickingBtnEnable: {
     fontSize: 11,
@@ -168,22 +178,13 @@ export default function App() {
   const [activeTabId, setActiveTabId] = useState<number | null>(null);
   const [activeTabUrl, setActiveTabUrl] = useState<string>("");
   const [verification, setVerification] = useState<VerificationState | null>(null);
-  const [hoverEnabled, setHoverEnabled] = useState(false);
-  const [permissionPending, setPermissionPending] = useState(false);
+  const [allSitesEnabled, setAllSitesEnabled] = useState(false);
+  const [allSitesPending, setAllSitesPending] = useState(false);
   const [pendingCandidate, setPendingCandidate] = useState<PendingCandidate | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
-
-  const refreshHoverState = useCallback((origin: string) => {
-    if (!origin || isRestrictedPage(origin)) return;
-    chrome.runtime.sendMessage(
-      { type: "GET_HOVER_SITE_STATE", origin },
-      (resp: MessageResponse<{ isEnabled: boolean }>) => {
-        if (chrome.runtime.lastError || !resp?.ok) return;
-        setHoverEnabled(resp.data.isEnabled);
-      }
-    );
-  }, []);
+  // Track whether we have already consumed a candidate from storage this session
+  const candidateConsumedRef = useRef(false);
 
   useEffect(() => {
     chrome.runtime.sendMessage(
@@ -202,34 +203,45 @@ export default function App() {
       }
     );
 
+    // Check all-sites permission state
+    chrome.runtime.sendMessage(
+      { type: "GET_ALL_SITES_STATE" },
+      (resp: MessageResponse<{ allSitesEnabled: boolean }>) => {
+        if (chrome.runtime.lastError || !resp?.ok) return;
+        setAllSitesEnabled(resp.data.allSitesEnabled);
+      }
+    );
+
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
       const tab = tabs[0];
       const tabId = tab?.id ?? null;
       const tabUrl = tab?.url ?? "";
       setActiveTabId(tabId);
       setActiveTabUrl(tabUrl);
+    });
 
-      if (tabUrl && !isRestrictedPage(tabUrl)) {
-        try {
-          const origin = new URL(tabUrl).origin;
-          refreshHoverState(origin);
-        } catch {
-          // ignore
+    // PRIMARY: Read pending candidate directly from storage (fastest path, no round-trip)
+    chrome.storage.local.get(PENDING_CANDIDATE_KEY, (result) => {
+      const candidate = result[PENDING_CANDIDATE_KEY] as PendingCandidate | undefined;
+      if (candidate && Date.now() - candidate.timestamp < 30000) {
+        candidateConsumedRef.current = true;
+        setPendingCandidate(candidate);
+        chrome.storage.local.remove(PENDING_CANDIDATE_KEY);
+      }
+    });
+
+    // SECONDARY: Send PANEL_READY so the SW can confirm/re-deliver if storage read missed it
+    chrome.runtime.sendMessage(
+      { type: "PANEL_READY" },
+      (resp: MessageResponse<{ candidate: PendingCandidate | null }>) => {
+        if (chrome.runtime.lastError || !resp?.ok) return;
+        if (resp.data.candidate && !candidateConsumedRef.current) {
+          candidateConsumedRef.current = true;
+          setPendingCandidate(resp.data.candidate);
+          chrome.runtime.sendMessage({ type: "CLEAR_PENDING_CANDIDATE" });
         }
       }
-
-      // Check for a pending candidate from a hover click
-      chrome.runtime.sendMessage(
-        { type: "GET_PENDING_CANDIDATE" },
-        (resp: MessageResponse<{ candidate: PendingCandidate | null }>) => {
-          if (chrome.runtime.lastError || !resp?.ok) return;
-          if (resp.data.candidate) {
-            setPendingCandidate(resp.data.candidate);
-            chrome.runtime.sendMessage({ type: "CLEAR_PENDING_CANDIDATE" });
-          }
-        }
-      );
-    });
+    );
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -245,62 +257,35 @@ export default function App() {
     return () => document.removeEventListener("mousedown", onOutside);
   }, [menuOpen]);
 
-  const handleEnableHover = async () => {
-    if (!activeTabUrl || isRestrictedPage(activeTabUrl)) return;
-    let origin: string;
-    try {
-      origin = new URL(activeTabUrl).origin;
-    } catch {
-      return;
-    }
-    setPermissionPending(true);
-    try {
-      const granted = await new Promise<boolean>((resolve) => {
-        chrome.permissions.request({ origins: [`${origin}/*`] }, resolve);
-      });
-      if (granted) {
-        await new Promise<void>((resolve) => {
-          chrome.runtime.sendMessage(
-            { type: "ENABLE_HOVER_ON_SITE", origin },
-            () => resolve()
-          );
+  // All-sites enable: called synchronously from the button click handler so that
+  // chrome.permissions.request() fires while the user-gesture context is still active.
+  const handleEnableAllSites = () => {
+    setAllSitesPending(true);
+    // Call chrome.permissions.request synchronously in the click handler (no await before this)
+    chrome.permissions.request(
+      { origins: ["http://*/*", "https://*/*"] },
+      (granted) => {
+        if (!granted) {
+          setAllSitesPending(false);
+          return;
+        }
+        chrome.runtime.sendMessage({ type: "ENABLE_ALL_SITES" }, () => {
+          setAllSitesEnabled(true);
+          setAllSitesPending(false);
         });
-        setHoverEnabled(true);
       }
-    } finally {
-      setPermissionPending(false);
-    }
+    );
   };
 
-  const handleDisableHover = async () => {
-    if (!activeTabUrl || isRestrictedPage(activeTabUrl)) return;
-    let origin: string;
-    try {
-      origin = new URL(activeTabUrl).origin;
-    } catch {
-      return;
-    }
-    await new Promise<void>((resolve) => {
-      chrome.runtime.sendMessage(
-        { type: "DISABLE_HOVER_ON_SITE", origin },
-        () => resolve()
-      );
+  const handleDisableAllSites = useCallback(() => {
+    chrome.runtime.sendMessage({ type: "DISABLE_ALL_SITES" }, () => {
+      setAllSitesEnabled(false);
     });
-    setHoverEnabled(false);
-  };
+  }, []);
 
   const isConnected = verification?.status === "verified";
   const bspOrigin = loaded?.settings?.bspOrigin ?? "";
   const restricted = isRestrictedPage(activeTabUrl);
-
-  let currentOrigin = "";
-  try {
-    if (activeTabUrl && !restricted) {
-      currentOrigin = new URL(activeTabUrl).origin;
-    }
-  } catch {
-    // ignore
-  }
 
   const logoUrl = typeof chrome !== "undefined"
     ? chrome.runtime.getURL("icons/bsp-logo.png")
@@ -382,45 +367,50 @@ export default function App() {
         </div>
       </header>
 
-      {/* ── Per-site hover banner ──────────────────────────────────────── */}
+      {/* ── All-sites hover banner ─────────────────────────────────────── */}
       {view === "capture" && (
         restricted ? (
           <div style={S.restrictedBanner}>
             Page picking is unavailable here. Enter product details manually.
           </div>
-        ) : currentOrigin ? (
-          <div style={S.sitePickingBanner}>
-            {hoverEnabled ? (
-              <>
+        ) : (
+          <div style={S.allSitesBanner}>
+            {allSitesEnabled ? (
+              <div style={S.allSitesBannerRow}>
                 <span style={{ color: "#555" }}>
                   <span style={{ color: "#1a6e2e" }}>✓</span>{" "}
-                  Hover picking on <strong style={{ fontWeight: 600 }}>{currentOrigin}</strong>
+                  Automatic picking is <strong style={{ fontWeight: 600 }}>ON</strong>
                 </span>
                 <button
                   style={S.sitePickingBtnDisable}
-                  onClick={handleDisableHover}
+                  onClick={handleDisableAllSites}
                   type="button"
                 >
                   Disable
                 </button>
-              </>
+              </div>
             ) : (
               <>
-                <span style={{ color: "#666" }}>
-                  Enable hover picking on this site
-                </span>
-                <button
-                  style={S.sitePickingBtnEnable}
-                  onClick={handleEnableHover}
-                  disabled={permissionPending}
-                  type="button"
-                >
-                  {permissionPending ? "…" : "Enable"}
-                </button>
+                <div style={S.allSitesBannerRow}>
+                  <span style={{ color: "#666" }}>
+                    Enable automatic picking on websites
+                  </span>
+                  <button
+                    style={S.sitePickingBtnEnable}
+                    onClick={handleEnableAllSites}
+                    disabled={allSitesPending}
+                    type="button"
+                  >
+                    {allSitesPending ? "…" : "Enable"}
+                  </button>
+                </div>
+                <div style={S.allSitesBannerExplainer}>
+                  This allows the BSP picker button to appear automatically on product images across any website you visit.
+                </div>
               </>
             )}
           </div>
-        ) : null
+        )
       )}
 
       {/* ── Main content ───────────────────────────────────────────────── */}

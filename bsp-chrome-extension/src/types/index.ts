@@ -198,7 +198,11 @@ export type MessageType =
   | "DISABLE_HOVER_ON_SITE"
   | "GET_HOVER_SITE_STATE"
   | "GET_PENDING_CANDIDATE"
-  | "CLEAR_PENDING_CANDIDATE";
+  | "CLEAR_PENDING_CANDIDATE"
+  | "PANEL_READY"
+  | "ENABLE_ALL_SITES"
+  | "DISABLE_ALL_SITES"
+  | "GET_ALL_SITES_STATE";
 
 export interface BaseMessage {
   type: MessageType;
@@ -272,6 +276,22 @@ export interface ClearPendingCandidateMessage extends BaseMessage {
   type: "CLEAR_PENDING_CANDIDATE";
 }
 
+export interface PanelReadyMessage extends BaseMessage {
+  type: "PANEL_READY";
+}
+
+export interface EnableAllSitesMessage extends BaseMessage {
+  type: "ENABLE_ALL_SITES";
+}
+
+export interface DisableAllSitesMessage extends BaseMessage {
+  type: "DISABLE_ALL_SITES";
+}
+
+export interface GetAllSitesStateMessage extends BaseMessage {
+  type: "GET_ALL_SITES_STATE";
+}
+
 export type ExtensionMessage =
   | LoadSettingsMessage
   | SaveSettingsMessage
@@ -287,7 +307,11 @@ export type ExtensionMessage =
   | DisableHoverOnSiteMessage
   | GetHoverSiteStateMessage
   | GetPendingCandidateMessage
-  | ClearPendingCandidateMessage;
+  | ClearPendingCandidateMessage
+  | PanelReadyMessage
+  | EnableAllSitesMessage
+  | DisableAllSitesMessage
+  | GetAllSitesStateMessage;
 
 // ─── Content Script Messages ──────────────────────────────────────────────────
 
