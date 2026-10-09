@@ -223,12 +223,13 @@ export function validateProductForm(form: ProductFormState): ProductFormErrors {
     }
   }
 
-  // Image URLs – validate selected ones
+  // Image URLs – validate selected ones (combined uploads + external ≤ 5)
   const selectedUrls = form.imageUrls.filter(
     (_, i) => form.selectedImageIndexes[i]
   );
-  if (selectedUrls.length > 5) {
-    errors.imageUrls = "At most 5 images may be included";
+  const totalImages = (form.imageUploadIds?.length ?? 0) + selectedUrls.length;
+  if (totalImages > 5) {
+    errors.imageUrls = `At most 5 images may be included (${totalImages} total — reduce uploaded or external images)`;
   } else {
     for (const url of selectedUrls) {
       if (url.length > 8192) {
