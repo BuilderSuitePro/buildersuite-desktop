@@ -431,7 +431,7 @@ async function handleMessage(
             // Tab may not have content script yet; dynamic injection for already-open tabs
             chrome.scripting.executeScript({
               target: { tabId: tab.id as number, allFrames: false },
-              files: ["src/content/extract.ts"],
+              files: [getContentScriptPath()],
             }).then(() => {
               chrome.tabs.sendMessage(tab.id as number, { type: "ENABLE_HOVER" }).catch(() => {});
             }).catch(() => {});
@@ -565,13 +565,10 @@ async function handleMessage(
             uploadId: message.uploadId,
           });
 
-          // discarded: false is ambiguous — may mean missing, foreign, or already attached.
-          // Mark the ticket as cleanup-needed if the discard was not confirmed.
-          if (discardResult.discarded) {
-            await updateUploadTicketState(message.uploadId, "cleanup-needed");
-          } else {
-            await updateUploadTicketState(message.uploadId, "cleanup-needed");
-          }
+          // Mark as cleanup-needed regardless of discarded value: if discarded=true the
+          // UI will remove the ticket entirely; if discarded=false the ambiguous state
+          // is preserved so the user can see it needs attention.
+          await updateUploadTicketState(message.uploadId, "cleanup-needed");
 
           sendResponse({ ok: true, data: { discarded: discardResult.discarded } });
         } catch (err) {
@@ -675,6 +672,21 @@ async function logPendingFinishTickets(): Promise<void> {
   }
 }
 
+/**
+ * Returns the content script path from the built manifest at runtime.
+ * CRXJS renames content script files with hashes during build; reading from
+ * the live manifest ensures we always reference the correct built path rather
+ * than the source-tree path ("src/content/extract.ts").
+ */
+function getContentScriptPath(): string {
+  const manifest = chrome.runtime.getManifest();
+  const contentScripts = manifest.content_scripts as Array<{ js?: string[] }> | undefined;
+  const js = contentScripts?.[0]?.js;
+  if (js && js.length > 0) return js[0];
+  // Should never be reached in a correctly built extension
+  return "src/content/extract.ts";
+}
+
 /** Registers the content script for all HTTP/HTTPS origins (idempotent). */
 async function registerAllSitesContentScript(): Promise<void> {
   try {
@@ -682,7 +694,7 @@ async function registerAllSitesContentScript(): Promise<void> {
       {
         id: "bsp-hover-all-sites",
         matches: ["http://*/*", "https://*/*"],
-        js: ["src/content/extract.ts"],
+        js: [getContentScriptPath()],
         runAt: "document_idle",
         persistAcrossSessions: true,
       },
