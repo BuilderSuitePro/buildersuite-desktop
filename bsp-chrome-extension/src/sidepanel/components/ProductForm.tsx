@@ -1420,7 +1420,10 @@ export default function ProductForm({
 
         if (draft.sourceUrl === activeTabUrl || !activeTabUrl) {
           setForm(draft.form);
-          setDraftBanner(`Draft restored — ${new Date(draft.savedAt).toLocaleTimeString()}`);
+          const shortUrl = draft.sourceUrl
+            ? draft.sourceUrl.replace(/^https?:\/\//, "").slice(0, 60)
+            : "(this page)";
+          setDraftBanner(`Draft restored (${shortUrl}) — ${new Date(draft.savedAt).toLocaleTimeString()}`);
         } else {
           const replace = window.confirm(
             `A draft exists for a different page:\n${draft.sourceUrl}\n\nReplace it?`
