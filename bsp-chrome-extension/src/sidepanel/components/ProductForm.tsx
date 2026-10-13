@@ -77,7 +77,7 @@ const s: Record<string, React.CSSProperties> = {
   },
   imageGrid: {
     display: "grid",
-    gridTemplateColumns: "1fr 1fr",
+    gridTemplateColumns: "55fr minmax(65px, 22.5fr) minmax(65px, 22.5fr)",
     gridTemplateRows: "auto auto",
     gap: 6,
   },
@@ -96,7 +96,6 @@ const s: Record<string, React.CSSProperties> = {
     minHeight: 120,
   },
   secondarySlot: {
-    aspectRatio: "1",
     borderRadius: 7,
     overflow: "hidden",
     border: "1.5px solid #e0e0e0",
